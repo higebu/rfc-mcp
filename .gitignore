@@ -1,0 +1,27 @@
+# Build artifacts
+bin/
+coverage.out
+coverage.html
+
+# RFC source files
+specs/
+
+# Database files
+data/*.db
+data/*.db-shm
+data/*.db-wal
+!data/.gitkeep
+rfc.db
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code
+.claude/
+
+# Mac
+.DS_Store
+
+# Added by goreleaser init:
+dist/
