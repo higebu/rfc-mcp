@@ -1,0 +1,76 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=cnqoj
+
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./...
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - arm64
+      - amd64
+      - "386"
+
+archives:
+  - formats: [tar.gz]
+    # this name template makes the OS and Arch compatible with the results of `uname`.
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    # use zip for windows archives
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+notarize:
+  macos:
+    - enabled: true
+      sign:
+        certificate: "{{.Env.APPLE_CERTIFICATE_P12}}"
+        password: "{{.Env.APPLE_CERTIFICATE_PASSWORD}}"
+      notarize:
+        issuer_id: "{{.Env.AC_API_ISSUER_ID}}"
+        key_id: "{{.Env.AC_API_KEY_ID}}"
+        key: "{{.Env.AC_API_KEY_P8}}"
+        wait: false
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+homebrew_casks:
+  - name: rfc-mcp
+    repository:
+      owner: higebu
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/higebu/rfc-mcp"
+    description: "MCP server for IETF RFC documents"
+    skip_upload: auto
+    generate_completions_from_executable:
+      args: ["completion"]
+      shells: ["bash", "zsh", "fish"]
+      shell_parameter_format: argument
+
+release:
+  footer: >-
+
+    ---
+
+    Released by [GoReleaser](https://github.com/goreleaser/goreleaser).

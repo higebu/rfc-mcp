@@ -1,0 +1,22 @@
+[Unit]
+Description=RFC MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=rfc-mcp
+Group=rfc-mcp
+ExecStart=/usr/local/bin/rfc-mcp serve --db /var/lib/rfc-mcp/rfc.db --transport http --addr :8080
+EnvironmentFile=-/etc/rfc-mcp/env
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/rfc-mcp
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

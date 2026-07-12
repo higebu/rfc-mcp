@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "rfc": {
+      "command": "rfc-mcp",
+      "args": ["serve", "--db", "./data/rfc.db"],
+      "defer_loading": false
+    }
+  }
+}

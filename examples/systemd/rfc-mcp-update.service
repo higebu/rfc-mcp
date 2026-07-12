@@ -1,0 +1,10 @@
+[Unit]
+Description=Update the RFC database with newly issued RFCs and refreshed errata
+After=network.target
+
+[Service]
+Type=oneshot
+User=rfc-mcp
+Group=rfc-mcp
+WorkingDirectory=/var/lib/rfc-mcp
+ExecStart=/usr/local/bin/rfc-mcp update --db /var/lib/rfc-mcp/rfc.db
