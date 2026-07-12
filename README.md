@@ -1,7 +1,6 @@
 # rfc-mcp
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/higebu/rfc-mcp.svg)](https://pkg.go.dev/github.com/higebu/rfc-mcp)
-[![Go Report Card](https://goreportcard.com/badge/github.com/higebu/rfc-mcp)](https://goreportcard.com/report/github.com/higebu/rfc-mcp)
 [![CI](https://github.com/higebu/rfc-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/higebu/rfc-mcp/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/github/higebu/rfc-mcp/graph/badge.svg)](https://codecov.io/github/higebu/rfc-mcp)
 ![GitHub Release](https://img.shields.io/github/v/release/higebu/rfc-mcp)
