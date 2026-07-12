@@ -297,7 +297,7 @@ func TestHandleGetSection(t *testing.T) {
 		if idx3 < 0 || idx31 < 0 || idx311 < 0 {
 			t.Fatalf("expected headings for 3, 3.1, 3.1.1, got: %s", text)
 		}
-		if !(idx3 < idx31 && idx31 < idx311) {
+		if idx3 >= idx31 || idx31 >= idx311 {
 			t.Errorf("expected heading order 3 < 3.1 < 3.1.1, got positions %d, %d, %d", idx3, idx31, idx311)
 		}
 	})

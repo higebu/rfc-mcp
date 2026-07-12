@@ -104,7 +104,7 @@ func plausibleSupplementEntry(e tocEntry) bool {
 	if e.number != "" {
 		return true
 	}
-	return e.title != "" && !(e.title[0] >= 'a' && e.title[0] <= 'z')
+	return e.title != "" && (e.title[0] < 'a' || e.title[0] > 'z')
 }
 
 // hasUncoveredTOCEntries reports whether the TOC lists a plausible entry

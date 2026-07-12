@@ -271,7 +271,7 @@ func TestGetDocument(t *testing.T) {
 		if idxIntro < 0 || idxHeading < 0 || idxHeader < 0 || idxSourcePort < 0 {
 			t.Fatalf("expected all section contents present, got: %q", doc)
 		}
-		if !(idxIntro < idxHeading && idxHeading < idxHeader && idxHeader < idxSourcePort) {
+		if idxIntro >= idxHeading || idxHeading >= idxHeader || idxHeader >= idxSourcePort {
 			t.Errorf("expected document order 1 < 3.1 heading < 3.1 content < 3.1.1, got positions %d, %d, %d, %d",
 				idxIntro, idxHeading, idxHeader, idxSourcePort)
 		}
