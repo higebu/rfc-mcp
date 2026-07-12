@@ -1,0 +1,76 @@
+package pipeline
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// withTempCacheDir points CacheDir/loadCache/saveCache at a fresh temp
+// directory for the duration of the test by overriding XDG_CACHE_HOME.
+func withTempCacheDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", dir)
+	return dir
+}
+
+func TestCacheDir(t *testing.T) {
+	base := withTempCacheDir(t)
+
+	dir, err := CacheDir()
+	if err != nil {
+		t.Fatalf("CacheDir: %v", err)
+	}
+	want := filepath.Join(base, "rfc-mcp")
+	if dir != want {
+		t.Errorf("CacheDir() = %q, want %q", dir, want)
+	}
+}
+
+func TestSaveAndLoadCache(t *testing.T) {
+	withTempCacheDir(t)
+
+	if data, err := loadCache("test.txt", time.Hour); err != nil || data != nil {
+		t.Fatalf("loadCache on miss = (%v, %v), want (nil, nil)", data, err)
+	}
+
+	want := []byte("hello world")
+	if err := saveCache("test.txt", want); err != nil {
+		t.Fatalf("saveCache: %v", err)
+	}
+
+	got, err := loadCache("test.txt", time.Hour)
+	if err != nil {
+		t.Fatalf("loadCache: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("loadCache = %q, want %q", got, want)
+	}
+}
+
+func TestLoadCache_Expired(t *testing.T) {
+	dir := withTempCacheDir(t)
+
+	cacheSubdir := filepath.Join(dir, "rfc-mcp")
+	if err := os.MkdirAll(cacheSubdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(cacheSubdir, "test.txt")
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := loadCache("test.txt", time.Hour)
+	if err != nil {
+		t.Fatalf("loadCache: %v", err)
+	}
+	if data != nil {
+		t.Errorf("loadCache on expired file = %q, want nil (cache miss)", data)
+	}
+}
