@@ -1,0 +1,173 @@
+<?xml version='1.0' encoding='utf-8'?>
+<rfc-index xmlns="https://www.rfc-editor.org/rfc-index" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://www.rfc-editor.org/rfc-index https://www.rfc-editor.org/rfc-index.xsd">
+  <std-entry>
+    <doc-id>STD3</doc-id>
+    <is-also>
+      <doc-id>RFC1122</doc-id>
+      <doc-id>RFC1123</doc-id>
+    </is-also>
+  </std-entry>
+  <rfc-not-issued-entry>
+    <doc-id>RFC14</doc-id>
+  </rfc-not-issued-entry>
+  <rfc-entry>
+    <doc-id>RFC8</doc-id>
+    <title>ARPA Network Functional Specifications</title>
+    <author>
+      <name>G. Deloche</name>
+    </author>
+    <date>
+      <month>May</month>
+      <year>1969</year>
+    </date>
+    <format>
+      <file-format>PDF</file-format>
+    </format>
+    <page-count>0</page-count>
+    <current-status>UNKNOWN</current-status>
+    <publication-status>UNKNOWN</publication-status>
+    <stream>Legacy</stream>
+    <doi>10.17487/RFC8</doi>
+  </rfc-entry>
+  <rfc-entry>
+    <doc-id>RFC1149</doc-id>
+    <title>Standard for the transmission of IP datagrams on avian carriers</title>
+    <author>
+      <name>D. Waitzman</name>
+    </author>
+    <date>
+      <month>April</month>
+      <day>1</day>
+      <year>1990</year>
+    </date>
+    <format>
+      <file-format>TXT</file-format>
+      <file-format>HTML</file-format>
+    </format>
+    <page-count>2</page-count>
+    <keywords>
+      <kw>avian</kw>
+      <kw>carrier</kw>
+      <kw>april</kw>
+      <kw>fools</kw>
+    </keywords>
+    <abstract>
+      <p>This memo describes an experimental method for the encapsulation of IP datagrams in avian carriers.  This specification is primarily useful in Metropolitan Area Networks.  This is an experimental, not recommended standard.</p>
+    </abstract>
+    <updated-by>
+      <doc-id>RFC2549</doc-id>
+      <doc-id>RFC6214</doc-id>
+    </updated-by>
+    <current-status>EXPERIMENTAL</current-status>
+    <publication-status>EXPERIMENTAL</publication-status>
+    <stream>INDEPENDENT</stream>
+    <doi>10.17487/RFC1149</doi>
+  </rfc-entry>
+  <rfc-entry>
+    <doc-id>RFC4271</doc-id>
+    <title>A Border Gateway Protocol 4 (BGP-4)</title>
+    <author>
+      <name>Y. Rekhter</name>
+      <title>Editor</title>
+    </author>
+    <author>
+      <name>T. Li</name>
+      <title>Editor</title>
+    </author>
+    <author>
+      <name>S. Hares</name>
+      <title>Editor</title>
+    </author>
+    <date>
+      <month>January</month>
+      <year>2006</year>
+    </date>
+    <format>
+      <file-format>TXT</file-format>
+      <file-format>HTML</file-format>
+    </format>
+    <page-count>104</page-count>
+    <keywords>
+      <kw>BGP-4</kw>
+      <kw>routing</kw>
+    </keywords>
+    <abstract>
+      <p>This document discusses the Border Gateway Protocol (BGP), which is an inter-Autonomous System routing protocol.</p>
+      <p>The primary function of a BGP speaking system is to exchange network reachability information with other BGP systems. This network reachability information includes information on the list of Autonomous Systems (ASes) that reachability information traverses. This information is sufficient for constructing a graph of AS connectivity for this reachability from which routing loops may be pruned, and, at the AS level, some policy decisions may be enforced.</p>
+      <p>BGP-4 provides a set of mechanisms for supporting Classless Inter-Domain Routing (CIDR). These mechanisms include support for advertising a set of destinations as an IP prefix, and eliminating the concept of network "class" within BGP. BGP-4 also introduces mechanisms that allow aggregation of routes, including aggregation of AS paths.</p>
+      <p>This document obsoletes RFC 1771. [STANDARDS-TRACK]</p>
+    </abstract>
+    <draft>draft-ietf-idr-bgp4-26</draft>
+    <obsoletes>
+      <doc-id>RFC1771</doc-id>
+    </obsoletes>
+    <updated-by>
+      <doc-id>RFC4724</doc-id>
+      <doc-id>RFC6286</doc-id>
+      <doc-id>RFC6608</doc-id>
+      <doc-id>RFC6793</doc-id>
+      <doc-id>RFC7606</doc-id>
+      <doc-id>RFC7607</doc-id>
+      <doc-id>RFC7705</doc-id>
+      <doc-id>RFC8212</doc-id>
+      <doc-id>RFC8654</doc-id>
+      <doc-id>RFC9072</doc-id>
+      <doc-id>RFC9687</doc-id>
+      <doc-id>RFC9774</doc-id>
+    </updated-by>
+    <current-status>DRAFT STANDARD</current-status>
+    <publication-status>DRAFT STANDARD</publication-status>
+    <stream>IETF</stream>
+    <area>rtg</area>
+    <wg_acronym>idr</wg_acronym>
+    <errata-url>https://www.rfc-editor.org/errata/rfc4271</errata-url>
+    <doi>10.17487/RFC4271</doi>
+  </rfc-entry>
+  <rfc-entry>
+    <doc-id>RFC9293</doc-id>
+    <title>Transmission Control Protocol (TCP)</title>
+    <author>
+      <name>W. Eddy</name>
+      <title>Editor</title>
+    </author>
+    <date>
+      <month>August</month>
+      <year>2022</year>
+    </date>
+    <format>
+      <file-format>HTML</file-format>
+      <file-format>TXT</file-format>
+      <file-format>PDF</file-format>
+      <file-format>XML</file-format>
+    </format>
+    <page-count>98</page-count>
+    <abstract>
+      <p>This document specifies the Transmission Control Protocol (TCP).  TCP is an important transport-layer protocol in the Internet protocol stack, and it has continuously evolved over decades of use and growth of the Internet.  Over this time, a number of changes have been made to TCP as it was specified in RFC 793, though these have only been documented in a piecemeal fashion.  This document collects and brings those changes together with the protocol specification from RFC 793.  This document obsoletes RFC 793, as well as RFCs 879, 2873, 6093, 6429, 6528, and 6691 that updated parts of RFC 793.  It updates RFCs 1011 and 1122, and it should be considered as a replacement for the portions of those documents dealing with TCP requirements.  It also updates RFC 5961 by adding a small clarification in reset handling while in the SYN-RECEIVED state.  The TCP header control bits from RFC 793 have also been updated based on RFC 3168.</p>
+    </abstract>
+    <draft>draft-ietf-tcpm-rfc793bis-28</draft>
+    <is-also>
+      <doc-id>STD7</doc-id>
+    </is-also>
+    <obsoletes>
+      <doc-id>RFC793</doc-id>
+      <doc-id>RFC879</doc-id>
+      <doc-id>RFC2873</doc-id>
+      <doc-id>RFC6093</doc-id>
+      <doc-id>RFC6429</doc-id>
+      <doc-id>RFC6528</doc-id>
+      <doc-id>RFC6691</doc-id>
+    </obsoletes>
+    <updates>
+      <doc-id>RFC1011</doc-id>
+      <doc-id>RFC1122</doc-id>
+      <doc-id>RFC5961</doc-id>
+    </updates>
+    <current-status>INTERNET STANDARD</current-status>
+    <publication-status>INTERNET STANDARD</publication-status>
+    <stream>IETF</stream>
+    <area>wit</area>
+    <wg_acronym>tcpm</wg_acronym>
+    <errata-url>https://www.rfc-editor.org/errata/rfc9293</errata-url>
+    <doi>10.17487/RFC9293</doi>
+  </rfc-entry>
+</rfc-index>
