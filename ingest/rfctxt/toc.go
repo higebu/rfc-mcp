@@ -14,7 +14,15 @@ var (
 	// period when there's no digit suffix, so a phrase like "A Summary
 	// of Primitives" (a real, unnumbered RFC 1 sub-item) doesn't get
 	// mistaken for a lettered entry "A" titled "Summary of Primitives".
-	leadingTokenRE = regexp.MustCompile(`^(\d+(?:\.\d+)*\.?|[A-Z](?:\.\d+)+\.?|[A-Z]\.|(?i:[ivxlcdm]+)\.?|(?i:appendix)\s+[A-Z](?:\.\d+)*\.?)\s+`)
+	// The "Section N." alternative covers TOCs that spell every entry
+	// out longhand ("Section 1. Conventions", RFC 1574) — without it the
+	// entry number never parses, which both starves findTOCBlock's
+	// body-restart detection and leaves the entry unmatchable against
+	// its body heading ("1.  Conventions"). Only "Section" takes a
+	// digit: a digit after "Appendix" (RFC 883's "Appendix 1. Domain
+	// Name Syntax Specification") must stay part of the title, or the
+	// appendix would collide with the document's real section 1.
+	leadingTokenRE = regexp.MustCompile(`^(\d+(?:\.\d+)*\.?|[A-Z](?:\.\d+)+\.?|[A-Z]\.|(?i:[ivxlcdm]+)\.?|(?i:appendix)\s+[A-Z](?:\.\d+)*\.?|(?i:section)\s+\d+(?:\.\d+)*\.?)\s+`)
 	bareRomanRE    = regexp.MustCompile(`(?i)^[ivxlcdm]+$`)
 	// cleanNumberSegRE matches a single dot-separated segment of a
 	// standard section number ("4", "1", "A"), used by numberDepth to
@@ -50,15 +58,52 @@ func numberDepth(number string) (depth int, ok bool) {
 // real body).
 const tocBlankRunThreshold = 10
 
+// tocProseRunThreshold is the number of consecutive non-blank lines with
+// no TOC-entry shape at all (no leading numbering token, no page-number
+// trailer) that ends a TOC block. A real prose paragraph — front matter
+// after the listing, or a body whose headings carry no numbers, like RFC
+// 1305's — immediately produces such a run, while a wrapped TOC entry
+// title only ever contributes one or two shapeless lines before its
+// page-numbered continuation resets the count.
+const tocProseRunThreshold = 3
+
+// listOfRE matches the "List of Figures" / "List of Tables" caption
+// listings some documents (e.g. RFC 1305) append to their Table of
+// Contents. Everything from that marker on stays inside the block's
+// line range (it's still location-aid material, not body), but
+// parseTOCEntries stops collecting entries there: figure captions are
+// never sections.
+var listOfRE = regexp.MustCompile(`(?i)^list of (figures|tables)$`)
+
+// pureNumberRE matches a line that is nothing but a page number — the
+// continuation of a TOC entry whose title wrapped just before it (RFC
+// 1305 renders "H.  Appendix H. ..." with its page number "98" alone on
+// the next line).
+var pureNumberRE = regexp.MustCompile(`^\d{1,4}$`)
+
 // findTOCBlock locates an in-document Table of Contents by a tolerant,
 // column-agnostic search: RFC 791 centers its "TABLE OF CONTENTS"
-// heading, so this can't reuse Tier 1's strict column-0 regex. It returns
-// the line range of entries following the heading, stopping at whichever
-// comes first: a run of >=tocBlankRunThreshold blank lines, or a column-0
-// line that itself looks like a real Tier-1 heading and carries no
-// page-number trailer (modern, unpaginated RFCs run the TOC straight
-// into section 1 with only a single blank line in between, e.g. RFC
-// 9293).
+// heading, so this can't reuse Tier 1's strict column-0 regex. It
+// returns the line range of entries following the heading, stopping at
+// whichever comes first:
+//
+//   - a run of >=tocBlankRunThreshold blank lines (RFC 791's page-sized
+//     gap before the body);
+//   - a column-0 heading-shaped line without a page trailer whose number
+//     was already listed earlier in the block — the body restarting at a
+//     number the TOC itself mentioned (modern RFCs run the TOC straight
+//     into "1.  Introduction", e.g. RFC 9293). Requiring the repeat,
+//     rather than treating any trailer-less heading shape as the body,
+//     is what keeps a trailer-less TOC entry inside the block: RFC 2244
+//     lists "C.       Full Copyright Statement" with no page number at
+//     all, and RFC 1305's single-space page numbers ("3.2.3.   Peer
+//     Variables 12") don't register as trailers either;
+//   - a run of >=tocProseRunThreshold shapeless lines (see the constant
+//     above), ending the block at the run's first line. When the line
+//     just before that run is itself a trailer-less column-0 heading
+//     shape, it's pulled back out of the block too: it's the body's
+//     first heading (its number simply never appeared in a truncated or
+//     partial TOC), not a listing entry.
 func findTOCBlock(lines []string) (headingIdx, start, end int, found bool) {
 	for i, line := range lines {
 		if tocHeadingRE.MatchString(strings.TrimSpace(line)) {
@@ -72,10 +117,15 @@ func findTOCBlock(lines []string) (headingIdx, start, end int, found bool) {
 	start = headingIdx + 1
 	end = len(lines)
 	blanks := 0
+	proseRun, proseStart := 0, 0
+	endedAtProse := false
+	seen := make(map[string]bool)
 	for i := start; i < len(lines); i++ {
 		line := lines[i]
-		if strings.TrimSpace(line) == "" {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
 			blanks++
+			proseRun = 0
 			if blanks >= tocBlankRunThreshold {
 				end = i - blanks + 1
 				break
@@ -83,10 +133,65 @@ func findTOCBlock(lines []string) (headingIdx, start, end int, found bool) {
 			continue
 		}
 		blanks = 0
+		number, _ := splitLeadingToken(strings.TrimSpace(stripTOCTrailer(trimmed)))
 		indent := len(line) - len(strings.TrimLeft(line, " "))
-		if indent == 0 && headingRE.MatchString(line) && !tocTrailerRE.MatchString(line) {
+		if indent == 0 && isHeadingLine(line) && !isTOCTrailer(line) && number != "" && seen[number] {
 			end = i
 			break
+		}
+		// Well-known unnumbered titles count as entry-like too: a
+		// modern pageless TOC ends in a run of numberless entries
+		// ("IAB Members at the Time of Approval" / "Acknowledgments" /
+		// "Authors' Addresses", RFC 9490) that would otherwise read as
+		// three shapeless lines and cut the block short. Crucially,
+		// "Introduction" is not in that list, so a body of bare
+		// unnumbered headings (RFC 1305) still ends the block.
+		_, knownTitle := matchKnownUnnumbered(trimmed)
+		entryLike := number != "" ||
+			stripTOCTrailer(trimmed) != trimmed ||
+			pureNumberRE.MatchString(trimmed) ||
+			listOfRE.MatchString(trimmed) ||
+			tocHeadingRE.MatchString(trimmed) ||
+			knownTitle
+		if entryLike {
+			proseRun = 0
+			if number != "" {
+				seen[number] = true
+			}
+			continue
+		}
+		if proseRun == 0 {
+			proseStart = i
+		}
+		proseRun++
+		if proseRun >= tocProseRunThreshold {
+			end = proseStart
+			endedAtProse = true
+			break
+		}
+	}
+	if endedAtProse {
+		// Pull the body's own leading heading(s) back out of the block:
+		// at most two lines, covering a top-level heading immediately
+		// followed by its first subsection with no prose in between. A
+		// line with any strippable page-number tail stays inside — it's
+		// a TOC entry whose page number is written with just one space
+		// (RFC 1305), not a body heading.
+		for range 2 {
+			j := end - 1
+			for j >= start && strings.TrimSpace(lines[j]) == "" {
+				j--
+			}
+			if j < start {
+				break
+			}
+			prev := lines[j]
+			trimmedPrev := strings.TrimSpace(prev)
+			if len(prev) != len(strings.TrimLeft(prev, " ")) || !isHeadingLine(prev) ||
+				stripTOCTrailer(trimmedPrev) != trimmedPrev {
+				break
+			}
+			end = j
 		}
 	}
 	return headingIdx, start, end, true
@@ -100,7 +205,10 @@ type tocEntry struct {
 }
 
 // parseTOCEntries extracts entries from the TOC block, stripping the
-// dot-leader/page-number trailer and any leading numbering token.
+// dot-leader/page-number trailer and any leading numbering token. It
+// stops at a "List of Figures" / "List of Tables" marker (figure
+// captions are location aids, not sections) and skips lines that are
+// nothing but a page number (a wrapped entry's continuation).
 func parseTOCEntries(lines []string, start, end int) []tocEntry {
 	var entries []tocEntry
 	for i := start; i < end; i++ {
@@ -108,9 +216,12 @@ func parseTOCEntries(lines []string, start, end int) []tocEntry {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
+		if listOfRE.MatchString(strings.TrimSpace(line)) {
+			break
+		}
 		indent := len(line) - len(strings.TrimLeft(line, " "))
-		trimmed := strings.TrimSpace(tocTrailerRE.ReplaceAllString(strings.TrimSpace(line), ""))
-		if trimmed == "" {
+		trimmed := strings.TrimSpace(stripTOCTrailer(strings.TrimSpace(line)))
+		if trimmed == "" || pureNumberRE.MatchString(trimmed) {
 			continue
 		}
 		number, title := splitLeadingToken(trimmed)
@@ -232,14 +343,17 @@ func rankIndents(entries []tocEntry) map[int]int {
 
 // locateHeading scans forward from line index from for a line whose
 // title (after stripping any leading numbering token) case-fold matches
-// title. Among matches, it prefers one that sits alone between blank
-// lines (or a document boundary) over one that doesn't: a real heading
-// is set off from surrounding text this way, while a same-named decoy —
-// e.g. a summary table listing "1  Configure-Request" ahead of the real,
-// detailed "5.1.  Configure-Request" section in RFC 1661 — sits flush
-// against neighboring list entries. The first match found is kept as a
-// fallback so a title with only ever one (non-isolated) occurrence is
-// still located rather than lost.
+// title. The nearest match that looks like a real heading wins: one that
+// sits alone between blank lines (or a document boundary), or one at
+// near-zero indentation set off by a preceding blank line — RFC 1305's
+// body headings ("Introduction" at column 0) run straight into their
+// first paragraph with no blank line below, and must still beat the
+// identically-titled appendix headings much further down. A same-named
+// decoy — e.g. a summary table listing "1  Configure-Request" ahead of
+// the real, detailed section in RFC 1661 — passes neither test: it sits
+// deeply indented and flush against the next list entry. The first match
+// found is kept as a fallback so a title with only ever decoy-shaped
+// occurrences is still located rather than lost.
 func locateHeading(lines []string, from int, title string) int {
 	fallback := -1
 	for i := from; i < len(lines); i++ {
@@ -250,6 +364,11 @@ func locateHeading(lines []string, from int, title string) int {
 		_, candidate := splitLeadingToken(line)
 		if strings.EqualFold(candidate, title) {
 			if isIsolatedLine(lines, i) {
+				return i
+			}
+			indent := len(lines[i]) - len(strings.TrimLeft(lines[i], " "))
+			precededByBlank := i == 0 || strings.TrimSpace(lines[i-1]) == ""
+			if precededByBlank && indent <= 3 {
 				return i
 			}
 			if fallback < 0 {

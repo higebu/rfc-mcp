@@ -22,6 +22,13 @@ func TestSplitLeadingToken(t *testing.T) {
 		{"PREFACE", "", "PREFACE"},
 		{"A Summary of Primitives", "", "A Summary of Primitives"},
 		{"Messages", "", "Messages"},
+		// RFC 1574 spells TOC entries longhand; the number must parse
+		// so the body's "1.  Conventions" can be matched against it.
+		{"Section 1. Conventions", "1", "Conventions"},
+		{"Section 3.1 Availability", "3.1", "Availability"},
+		// A digit after "Appendix" stays in the title (RFC 883):
+		// reading it as number "1" would collide with real section 1.
+		{"Appendix 1. Domain Name Syntax Specification", "", "Appendix 1. Domain Name Syntax Specification"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
@@ -207,5 +214,179 @@ func TestDetectTier2SkipsUnlocatableEntries(t *testing.T) {
 	}
 	if headings[0].title != "Introduction" || headings[1].title != "Conclusion" {
 		t.Errorf("unexpected headings: %+v", headings)
+	}
+}
+
+// TestFindTOCBlockKeepsTrailerlessEntry guards against RFC 2244's bug: a
+// TOC entry with no page number at all ("C.       Full Copyright
+// Statement") looks exactly like a body heading, and the old boundary
+// rule ("any trailer-less heading shape ends the block") cut the TOC
+// short there. The block must only end at a number the TOC already
+// listed — the body restarting at "1." — so the C entry stays inside.
+func TestFindTOCBlockKeepsTrailerlessEntry(t *testing.T) {
+	lines := []string{
+		"Table of Contents",
+		"",
+		"1.       Protocol Overview ....................................    4",
+		"B.       ACAP Keyword Index ...................................   66",
+		"C.       Full Copyright Statement",
+		"",
+		"1.  Protocol Overview",
+		"",
+		"   body text",
+	}
+	_, _, end, found := findTOCBlock(lines)
+	if !found {
+		t.Fatal("expected to find TOC heading")
+	}
+	if end != 6 {
+		t.Errorf("end = %d, want 6 (trailer-less C entry stays inside; block ends at the body's repeat of 1.)", end)
+	}
+	entries := parseTOCEntries(lines, 1, end)
+	var last tocEntry
+	if len(entries) > 0 {
+		last = entries[len(entries)-1]
+	}
+	if last.number != "C" {
+		t.Errorf("last entry = %+v, want the trailer-less C entry", last)
+	}
+}
+
+// TestFindTOCBlockEndsAtUnnumberedBody covers RFC 1305's shape: TOC
+// entries with single-space page numbers ("3.2.3.   Peer Variables 12")
+// that no trailer check recognizes, followed by a body whose headings
+// carry no numbers at all. The single-space entries must not end the
+// block (their numbers are first occurrences), and the block must end at
+// the bare-title body start via the shapeless-prose run instead.
+func TestFindTOCBlockEndsAtUnnumberedBody(t *testing.T) {
+	lines := []string{
+		"Table of Contents",
+		"",
+		"1.       Introduction   1",
+		"",
+		"3.2.     State Variables and Parameters 9",
+		"",
+		"3.2.3.   Peer Variables 12",
+		"",
+		"Introduction",
+		"This document constitutes a formal specification of the protocol",
+		"and everything that follows is ordinary running body prose text.",
+	}
+	_, start, end, found := findTOCBlock(lines)
+	if !found {
+		t.Fatal("expected to find TOC heading")
+	}
+	if end != 8 {
+		t.Errorf("end = %d, want 8 (block ends at the bare-title body start)", end)
+	}
+	entries := parseTOCEntries(lines, start, end)
+	if len(entries) != 3 || entries[2].number != "3.2.3" || entries[2].title != "Peer Variables" {
+		t.Errorf("entries = %+v, want the single-space page numbers stripped", entries)
+	}
+}
+
+// TestFindTOCBlockKnownUnnumberedTail covers RFC 9490's shape: a modern
+// pageless TOC ending in a run of numberless entries ("IAB Members at
+// the Time of Approval" / "Acknowledgments" / "Authors' Addresses").
+// The well-known titles among them count as entry-like, so the run
+// never reaches the shapeless-prose threshold and the block extends to
+// the body's numbered restart.
+func TestFindTOCBlockKnownUnnumberedTail(t *testing.T) {
+	lines := []string{
+		"Table of Contents",
+		"",
+		"   1.  Introduction",
+		"   IAB Members at the Time of Approval",
+		"   Acknowledgments",
+		"   Authors' Addresses",
+		"",
+		"1.  Introduction",
+		"",
+		"   body text",
+	}
+	_, start, end, found := findTOCBlock(lines)
+	if !found {
+		t.Fatal("expected to find TOC heading")
+	}
+	if end != 7 {
+		t.Errorf("end = %d, want 7 (numberless tail entries stay inside the block)", end)
+	}
+	entries := parseTOCEntries(lines, start, end)
+	if len(entries) != 4 {
+		t.Fatalf("got %d entries, want 4 (including the numberless tail)", len(entries))
+	}
+	if entries[1].title != "IAB Members at the Time of Approval" {
+		t.Errorf("entries[1] = %+v, want the IAB Members entry", entries[1])
+	}
+}
+
+// TestFindTOCBlockBacktracksBodyHeading: when the block ends at a
+// shapeless-prose run, a trailer-less heading line immediately before
+// the run is the body's first heading (its number just never appeared
+// in the truncated TOC), and must be pulled back out of the block.
+func TestFindTOCBlockBacktracksBodyHeading(t *testing.T) {
+	lines := []string{
+		"Table of Contents",
+		"",
+		"PART ONE",
+		"",
+		"1.  Overview",
+		"prose line one runs here",
+		"prose line two runs here",
+		"prose line three runs here",
+	}
+	_, _, end, found := findTOCBlock(lines)
+	if !found {
+		t.Fatal("expected to find TOC heading")
+	}
+	if end != 4 {
+		t.Errorf("end = %d, want 4 (the body heading before the prose run is not TOC)", end)
+	}
+}
+
+func TestParseTOCEntriesStopsAtListOfFigures(t *testing.T) {
+	lines := []string{
+		"1.       Introduction   1",
+		"List of Figures",
+		"Figure 1. Implementation Model  6",
+	}
+	entries := parseTOCEntries(lines, 0, len(lines))
+	if len(entries) != 1 || entries[0].number != "1" {
+		t.Errorf("entries = %+v, want just the numbered entry before List of Figures", entries)
+	}
+}
+
+func TestParseTOCEntriesSkipsPageNumberContinuation(t *testing.T) {
+	lines := []string{
+		"H.       Appendix H. Analysis of Errors",
+		"98",
+		"H.1.     Introduction   98",
+	}
+	entries := parseTOCEntries(lines, 0, len(lines))
+	if len(entries) != 2 {
+		t.Fatalf("got %d entries, want 2 (the lone page number line is skipped)", len(entries))
+	}
+}
+
+// TestLocateHeadingPrefersNearestColumnZeroMatch covers RFC 1305: the
+// body heading "Introduction" sits at column 0 with a blank line above
+// but body text directly below (not isolated), while an appendix much
+// further down repeats the same title fully isolated. The nearest
+// column-0, blank-preceded match must win, or every TOC entry after it
+// anchors into the appendices.
+func TestLocateHeadingPrefersNearestColumnZeroMatch(t *testing.T) {
+	lines := []string{
+		"",
+		"Introduction",
+		"This document constitutes a formal specification.",
+		"",
+		"more content",
+		"",
+		"Introduction", // appendix twin: fully isolated
+		"",
+	}
+	idx := locateHeading(lines, 0, "Introduction")
+	if idx != 1 {
+		t.Errorf("locateHeading found index %d, want 1 (nearest column-0 match preceded by a blank)", idx)
 	}
 }

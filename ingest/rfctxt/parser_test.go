@@ -422,6 +422,128 @@ func TestPromoteDotZeroLeavesRealNestingAlone(t *testing.T) {
 	}
 }
 
+// TestRescueDanglingParentsRecoversMissingHeading exercises RFC 1142's
+// shape: "12.2 Dynamic Conformance" directly follows the last wrapped
+// line of the previous paragraph with no blank line, so detectTier1's
+// precededByBlank guard never finds it. Its already-detected child
+// "12.2.3" proves the heading must exist, so the rescue pass must find
+// it by re-scanning the raw lines without that guard.
+func TestRescueDanglingParentsRecoversMissingHeading(t *testing.T) {
+	lines := []string{
+		"Header",
+		"",
+		"some wrapped paragraph text ending here.",
+		"12.2 Dynamic Conformance",
+		"",
+		"12.2.3 Decision Process Conformance",
+		"body text",
+	}
+	headings := []rawHeading{
+		{lineIdx: 5, number: "12.2.3", title: "Decision Process Conformance", level: 3, parent: "12.2"},
+	}
+	got := rescueDanglingParents(lines, headings, 0, 0)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 headings after rescue, got %d: %+v", len(got), got)
+	}
+	if got[0].number != "12.2" || got[0].title != "Dynamic Conformance" || got[0].lineIdx != 3 {
+		t.Errorf("expected rescued heading 12.2 at line 3, got %+v", got[0])
+	}
+}
+
+// TestRescueDanglingParentsChainsThroughMultipleLevels exercises RFC
+// 1142's harder shape: both "8.4" and "8.4.1" are missing (neither
+// preceded by a blank line -- "8.4.1" directly follows "8.4" itself, two
+// headings back to back), and only the deeper "8.4.1.1" was originally
+// detected. Rescuing "8.4.1" from that anchor reveals "8.4" is needed
+// too, one level further up, which is why the rescue pass loops instead
+// of doing a single pass.
+func TestRescueDanglingParentsChainsThroughMultipleLevels(t *testing.T) {
+	lines := []string{
+		"Header",
+		"",
+		"8.4 Broadcast Subnetworks",
+		"8.4.1 Broadcast Subnetwork IIH PDUs",
+		"some paragraph text with no blank line before the next heading.",
+		"8.4.1.1 IIH PDU Acceptance Tests",
+		"body text",
+	}
+	headings := []rawHeading{
+		{lineIdx: 5, number: "8.4.1.1", title: "IIH PDU Acceptance Tests", level: 3, parent: "8.4.1"},
+	}
+	got := rescueDanglingParents(lines, headings, 0, 0)
+	byNumber := make(map[string]rawHeading, len(got))
+	for _, h := range got {
+		byNumber[h.number] = h
+	}
+	for _, number := range []string{"8.4", "8.4.1", "8.4.1.1"} {
+		if _, ok := byNumber[number]; !ok {
+			t.Errorf("expected heading %q to be present after rescue, got %+v", number, got)
+		}
+	}
+	if byNumber["8.4.1"].parent != "8.4" {
+		t.Errorf(`"8.4.1": got parent=%q, want "8.4"`, byNumber["8.4.1"].parent)
+	}
+}
+
+// TestRescueDanglingParentsNoOpWhenNothingDangling is the regression
+// guard: a document where every parent link already points at a real
+// heading must come out unchanged.
+func TestRescueDanglingParentsNoOpWhenNothingDangling(t *testing.T) {
+	lines := []string{"Header", "", "3 Functional Specification", "", "3.1 Header Format", "body"}
+	headings := []rawHeading{
+		{lineIdx: 2, number: "3", title: "Functional Specification", level: 1, parent: ""},
+		{lineIdx: 4, number: "3.1", title: "Header Format", level: 2, parent: "3"},
+	}
+	got := rescueDanglingParents(lines, headings, 0, 0)
+	if len(got) != len(headings) {
+		t.Fatalf("expected no change, got %d headings, want %d", len(got), len(headings))
+	}
+}
+
+// TestRescueDanglingParentsLeavesUnrescuableDangling exercises RFC
+// 1142's Appendix A/C shape: no heading line for the dangling parent
+// exists anywhere, in any format, so the rescue pass must leave it
+// alone (reparentDanglingAncestors' existing nearest-ancestor fallback
+// handles this case instead).
+func TestRescueDanglingParentsLeavesUnrescuableDangling(t *testing.T) {
+	lines := []string{"Header", "", "A.1 Introduction", "body"}
+	headings := []rawHeading{
+		{lineIdx: 2, number: "A.1", title: "Introduction", level: 2, parent: "A"},
+	}
+	got := rescueDanglingParents(lines, headings, 0, 0)
+	if len(got) != 1 {
+		t.Fatalf("expected no new heading rescued (no real \"A\" heading line exists), got %d: %+v", len(got), got)
+	}
+}
+
+// TestRescueDanglingParentsRespectsTOCExclusion guards against rescuing
+// a heading from inside the document's own Table of Contents block: a
+// TOC line like "7 Protocol Classes 4" (single space before the trailing
+// page number "4") doesn't carry enough of a gap to be rejected by
+// isTOCTrailer on its own, so only the tocStart/tocEnd range exclusion
+// protects against misreading it as the real "7" heading.
+func TestRescueDanglingParentsRespectsTOCExclusion(t *testing.T) {
+	lines := []string{
+		"Header",
+		"7 Protocol Classes 4",
+		"",
+		"7.1 Something",
+		"body",
+	}
+	headings := []rawHeading{
+		{lineIdx: 3, number: "7.1", title: "Something", level: 2, parent: "7"},
+	}
+	got := rescueDanglingParents(lines, headings, 1, 2)
+	for _, h := range got {
+		if h.number == "7" {
+			t.Fatalf(`"7" must not be rescued from inside the excluded TOC range, got %+v`, got)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected no rescue to happen, got %d headings: %+v", len(got), got)
+	}
+}
+
 func TestParseRFCTextEmptyTitleUsesRFCNumber(t *testing.T) {
 	raw := []byte("No headings at all, just one line.\n")
 	sections, err := ParseRFCText(raw, 42, "")
@@ -430,5 +552,92 @@ func TestParseRFCTextEmptyTitleUsesRFCNumber(t *testing.T) {
 	}
 	if sections[0].Title != "RFC 42" {
 		t.Errorf("Title = %q, want %q", sections[0].Title, "RFC 42")
+	}
+}
+
+// TestParseRFCTextSupplementsTier1FromTOC covers the merged-tier gate:
+// Tier 1 is healthy (front matter plus numbered sections), but the TOC
+// lists a section whose body heading carries no number, which only the
+// TOC title search can locate. The output must keep the Tier-1-only
+// headings (front matter is never listed in a TOC) and graft in the
+// TOC-only one — neither tier wholesale.
+func TestParseRFCTextSupplementsTier1FromTOC(t *testing.T) {
+	raw := []byte(`Abstract
+
+This memo tests the supplement path.
+
+Table of Contents
+
+   1.  First
+   2.  Second
+   Wire Format Details
+   3.  Third
+
+1.  First
+
+   first body
+
+2.  Second
+
+   second body
+
+Wire Format Details
+
+   located only via the TOC
+
+3.  Third
+
+   third body
+`)
+	sections, err := ParseRFCText(raw, 9999, "Test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]string)
+	for _, s := range sections {
+		got[s.Number] = s.Title
+	}
+	for _, want := range []string{"abstract", "1", "2", "3", "wire-format-details"} {
+		if _, ok := got[want]; !ok {
+			t.Errorf("missing section %q in %v", want, sections)
+		}
+	}
+	if title := got["wire-format-details"]; title != "Wire Format Details" {
+		t.Errorf("supplement title = %q, want \"Wire Format Details\"", title)
+	}
+}
+
+func TestSupplementFromTier2SkipsCovered(t *testing.T) {
+	tier1 := []rawHeading{
+		{lineIdx: 10, number: "1", title: "First"},
+		{lineIdx: 20, number: "references", title: "References"},
+	}
+	tier2 := []rawHeading{
+		{lineIdx: 10, number: "1", title: "First"},             // same number and line
+		{lineIdx: 20, number: "7", title: "References"},        // TOC spells it 7, Tier 1 owns the line
+		{lineIdx: 30, number: "2", title: "Second"},            // genuinely new
+		{lineIdx: 40, number: "parameter", title: "parameter"}, // wrapped-fragment slug
+	}
+	sup := supplementFromTier2(tier2, tier1)
+	if len(sup) != 1 || sup[0].number != "2" {
+		t.Errorf("supplement = %+v, want just the genuinely new heading 2", sup)
+	}
+}
+
+func TestPlausibleSupplementEntry(t *testing.T) {
+	tests := []struct {
+		e    tocEntry
+		want bool
+	}{
+		{tocEntry{number: "3.2", title: "anything"}, true},
+		{tocEntry{title: "Appendices"}, true},
+		{tocEntry{title: "1.1.1.1: Credential Constructs"}, true},
+		{tocEntry{title: "parameter"}, false},
+		{tocEntry{title: ""}, false},
+	}
+	for _, tt := range tests {
+		if got := plausibleSupplementEntry(tt.e); got != tt.want {
+			t.Errorf("plausibleSupplementEntry(%+v) = %v, want %v", tt.e, got, tt.want)
+		}
 	}
 }
