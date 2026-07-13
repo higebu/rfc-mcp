@@ -32,21 +32,25 @@ func TestCacheDir(t *testing.T) {
 func TestSaveAndLoadCache(t *testing.T) {
 	withTempCacheDir(t)
 
-	if data, err := loadCache("test.txt", time.Hour); err != nil || data != nil {
-		t.Fatalf("loadCache on miss = (%v, %v), want (nil, nil)", data, err)
+	if data, mtime, err := loadCache("test.txt", time.Hour); err != nil || data != nil || !mtime.IsZero() {
+		t.Fatalf("loadCache on miss = (%v, %v, %v), want (nil, zero, nil)", data, mtime, err)
 	}
 
+	before := time.Now()
 	want := []byte("hello world")
 	if err := saveCache("test.txt", want); err != nil {
 		t.Fatalf("saveCache: %v", err)
 	}
 
-	got, err := loadCache("test.txt", time.Hour)
+	got, mtime, err := loadCache("test.txt", time.Hour)
 	if err != nil {
 		t.Fatalf("loadCache: %v", err)
 	}
 	if string(got) != string(want) {
 		t.Errorf("loadCache = %q, want %q", got, want)
+	}
+	if mtime.Before(before.Add(-time.Second)) {
+		t.Errorf("loadCache mtime = %v, want at or after %v", mtime, before)
 	}
 }
 
@@ -66,11 +70,14 @@ func TestLoadCache_Expired(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	data, err := loadCache("test.txt", time.Hour)
+	data, mtime, err := loadCache("test.txt", time.Hour)
 	if err != nil {
 		t.Fatalf("loadCache: %v", err)
 	}
 	if data != nil {
 		t.Errorf("loadCache on expired file = %q, want nil (cache miss)", data)
+	}
+	if !mtime.IsZero() {
+		t.Errorf("loadCache mtime on expired file = %v, want zero", mtime)
 	}
 }

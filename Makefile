@@ -39,9 +39,14 @@ download: build
 update: build
 	./$(BIN_DIR)/rfc-mcp update --db $(DB_PATH)
 
-# Show database info
+# Show database info. built_at/rfc_index_fetched_at are run as separate
+# sqlite3 invocations (rather than one multi-statement command) so a
+# database predating the meta table still prints the row counts instead of
+# failing silently.
 db-info:
 	@sqlite3 $(DB_PATH) "SELECT COUNT(*) || ' rfcs' FROM rfcs; SELECT COUNT(*) || ' sections' FROM sections;" 2>/dev/null || echo "Database not found: $(DB_PATH)"
+	@sqlite3 $(DB_PATH) "SELECT 'built_at: ' || value FROM meta WHERE key = 'built_at';" 2>/dev/null || true
+	@sqlite3 $(DB_PATH) "SELECT 'rfc_index_fetched_at: ' || value FROM meta WHERE key = 'rfc_index_fetched_at';" 2>/dev/null || true
 
 # Run Go tests
 test:

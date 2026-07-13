@@ -10,8 +10,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/higebu/rfc-mcp/db"
+	"github.com/higebu/rfc-mcp/internal/testutil"
 )
 
 // TestDraftsEnabled covers the RFC_MCP_DISABLE_DRAFTS knob cmdServe reads
@@ -98,6 +100,81 @@ func TestBearerAuthMiddleware(t *testing.T) {
 			t.Errorf("expected 401, got %d", w.Code)
 		}
 	})
+}
+
+// TestBuildInstructions covers the data-freshness line (see freshnessLine)
+// composed into the server's Instructions: present with a build timestamp,
+// degraded (timestamp omitted) for a database predating the meta table, and
+// the Internet-Draft sentences gated on the drafts flag.
+func TestBuildInstructions(t *testing.T) {
+	t.Run("with built_at, drafts enabled", func(t *testing.T) {
+		d := testutil.SetupTestDB(t)
+		if err := d.SetMeta("built_at", "2026-07-12T00:00:00Z"); err != nil {
+			t.Fatalf("SetMeta: %v", err)
+		}
+
+		got := buildInstructions(d, true)
+		for _, want := range []string{
+			"Data freshness:",
+			"built 2026-07-12;",
+			"covers RFC 1-9293",
+			"rebuild with 'rfc-mcp update'",
+			"search_drafts, get_draft_metadata, get_draft_toc, and get_draft_section",
+			"Draft tools query the IETF Datatracker live and are always current.",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("buildInstructions() missing %q, got:\n%s", want, got)
+			}
+		}
+	})
+
+	t.Run("without meta (old db), drafts enabled", func(t *testing.T) {
+		d := testutil.SetupTestDB(t)
+
+		got := buildInstructions(d, true)
+		if strings.Contains(got, "built ") {
+			t.Errorf("buildInstructions() should omit a build timestamp when meta is absent, got:\n%s", got)
+		}
+		if !strings.Contains(got, "covers RFC 1-9293") {
+			t.Errorf("buildInstructions() missing RFC range, got:\n%s", got)
+		}
+	})
+
+	t.Run("drafts disabled", func(t *testing.T) {
+		d := testutil.SetupTestDB(t)
+
+		got := buildInstructions(d, false)
+		for _, unwanted := range []string{"search_drafts", "Draft tools query"} {
+			if strings.Contains(got, unwanted) {
+				t.Errorf("buildInstructions(drafts=false) should not mention draft tools, got:\n%s", got)
+			}
+		}
+		if !strings.Contains(got, "covers RFC 1-9293") {
+			t.Errorf("buildInstructions(drafts=false) missing RFC range, got:\n%s", got)
+		}
+	})
+}
+
+// TestFreshnessLine_EmptyDB covers a freshly initialized, still-empty
+// database (no issued RFCs yet): freshnessLine must return "" rather than
+// reporting a bogus range, and buildInstructions must not fail because of it.
+func TestFreshnessLine_EmptyDB(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "empty.db")
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadWrite: %v", err)
+	}
+	defer d.Close()
+	if err := d.InitSchema(); err != nil {
+		t.Fatalf("InitSchema: %v", err)
+	}
+
+	if got := freshnessLine(d, true); got != "" {
+		t.Errorf("freshnessLine() on empty db = %q, want \"\"", got)
+	}
+	if got := buildInstructions(d, true); strings.Contains(got, "Data freshness:") {
+		t.Errorf("buildInstructions() on empty db should omit the freshness line, got:\n%s", got)
+	}
 }
 
 // captureStdout runs fn and returns whatever it wrote to os.Stdout.
@@ -508,6 +585,7 @@ func TestCmdUpdate(t *testing.T) {
 		"-raw-dir", t.TempDir(),
 	})
 
+	var builtAtSeed string
 	func() {
 		d, err := db.Open(dbPath)
 		if err != nil {
@@ -523,6 +601,11 @@ func TestCmdUpdate(t *testing.T) {
 		}
 		if _, err := d.GetRFCMetadata(791); err == nil {
 			t.Fatal("rfc 791 should not exist yet before update")
+		}
+		var ok bool
+		builtAtSeed, ok = d.GetMeta("built_at")
+		if !ok {
+			t.Error("expected built_at to be recorded in meta after build")
 		}
 	}()
 
@@ -610,6 +693,30 @@ func TestCmdUpdate(t *testing.T) {
 	}
 	if len(errataNew) != 1 {
 		t.Errorf("expected 1 errata entry for rfc 791 after update (wholesale replace), got %d", len(errataNew))
+	}
+
+	// built_at must be refreshed (re-stamped, not just left over from build)
+	// and rfc_index_fetched_at recorded, per RunUpdate's recordBuildMeta call.
+	builtAtUpdate, ok := d.GetMeta("built_at")
+	if !ok {
+		t.Fatal("expected built_at to be recorded in meta after update")
+	}
+	seedTime, err := time.Parse(time.RFC3339, builtAtSeed)
+	if err != nil {
+		t.Fatalf("built_at from build is not RFC 3339: %q: %v", builtAtSeed, err)
+	}
+	updateTime, err := time.Parse(time.RFC3339, builtAtUpdate)
+	if err != nil {
+		t.Fatalf("built_at from update is not RFC 3339: %q: %v", builtAtUpdate, err)
+	}
+	if updateTime.Before(seedTime) {
+		t.Errorf("built_at after update (%s) is before built_at from build (%s), want refreshed", builtAtUpdate, builtAtSeed)
+	}
+
+	if fetchedAt, ok := d.GetMeta("rfc_index_fetched_at"); !ok {
+		t.Error("expected rfc_index_fetched_at to be recorded in meta after update")
+	} else if _, err := time.Parse(time.RFC3339, fetchedAt); err != nil {
+		t.Errorf("rfc_index_fetched_at = %q is not RFC 3339: %v", fetchedAt, err)
 	}
 }
 

@@ -4,19 +4,30 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/higebu/rfc-mcp/db"
 )
 
 // rfcRangeHint returns a suffix naming the highest currently issued RFC
-// number (e.g. " (valid RFC numbers range from 1 to 9793)"), or "" if that
+// number (e.g. " (valid RFC numbers range from 1 to 9793)"), extended with
+// the database's build date when available (e.g. " (valid RFC numbers
+// range from 1 to 9793; database built 2026-07-12)"), or "" if the RFC
 // lookup itself fails.
 func rfcRangeHint(d *db.DB) string {
 	result, err := d.ListRFCs("", "", "", "", -1, 0)
 	if err != nil || len(result.RFCs) == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" (valid RFC numbers range from 1 to %d)", result.RFCs[len(result.RFCs)-1].Number)
+	maxNumber := result.RFCs[len(result.RFCs)-1].Number
+
+	var built string
+	if builtAt, ok := d.GetMeta("built_at"); ok {
+		if t, err := time.Parse(time.RFC3339, builtAt); err == nil {
+			built = "; database built " + t.Format("2006-01-02")
+		}
+	}
+	return fmt.Sprintf(" (valid RFC numbers range from 1 to %d%s)", maxNumber, built)
 }
 
 // rfcNotFoundError builds a helpful error message for an RFC number that

@@ -25,7 +25,7 @@ ingest/
   rfctxt/             # Plain-text RFC section parser (column-0 headings, TOC-anchor, whole-body fallback)
   pipeline/           # Download + cache + build/update orchestration
   drafts/             # On-demand Internet-Draft fetch: Datatracker search/metadata + archive body, own on-disk cache
-db/                   # SQLite schema, queries, FTS5 full-text search, reference extraction
+db/                   # SQLite schema, queries, FTS5 full-text search, reference extraction, build metadata (meta table: built_at, rfc_index_fetched_at)
 tools/                # MCP tool handlers (list_rfcs, get_metadata, get_errata, get_toc, get_section, get_document, search, get_references, search_drafts, get_draft_metadata, get_draft_toc, get_draft_section)
 internal/testutil/    # Shared test helpers (SeedData for a small real-RFC fixture DB)
 data/                 # Database files (gitignored except .gitkeep)

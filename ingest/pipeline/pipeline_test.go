@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/higebu/rfc-mcp/db"
 )
@@ -137,6 +138,21 @@ func TestPipeline_Run(t *testing.T) {
 	}
 	if len(items) == 0 {
 		t.Error("expected errata for rfc 4954 from errata-sample.json")
+	}
+
+	// A completed run must stamp built_at and rfc_index_fetched_at (see
+	// recordBuildMeta) so serve/rfcRangeHint can report data freshness.
+	builtAt, ok := d.GetMeta("built_at")
+	if !ok {
+		t.Error("expected built_at to be recorded in meta after Run")
+	} else if _, err := time.Parse(time.RFC3339, builtAt); err != nil {
+		t.Errorf("built_at = %q is not RFC 3339: %v", builtAt, err)
+	}
+	fetchedAt, ok := d.GetMeta("rfc_index_fetched_at")
+	if !ok {
+		t.Error("expected rfc_index_fetched_at to be recorded in meta after Run")
+	} else if _, err := time.Parse(time.RFC3339, fetchedAt); err != nil {
+		t.Errorf("rfc_index_fetched_at = %q is not RFC 3339: %v", fetchedAt, err)
 	}
 }
 

@@ -306,6 +306,67 @@ func draftsEnabled() bool {
 	return os.Getenv("RFC_MCP_DISABLE_DRAFTS") != "1"
 }
 
+// buildInstructions composes the MCP server's Instructions string: static
+// tool-usage guidance plus a data-freshness line (see freshnessLine)
+// reporting how current the baked SQLite snapshot is. drafts controls
+// whether the Internet-Draft tool sentence is included, since those tools
+// are only registered when draftsEnabled() is true (see cmdServe).
+func buildInstructions(d *db.DB, drafts bool) string {
+	instructions := "IETF RFC specification server. Use list_rfcs to find RFCs, get_metadata for status/obsoletes/updates/errata summary, get_errata for full errata detail (original/corrected text, notes), get_toc to browse structure, get_section to read content, get_document to read an entire RFC as one paginated document, search for full-text search across all RFCs, and get_references to explore cross-references between RFCs."
+
+	if freshness := freshnessLine(d, drafts); freshness != "" {
+		instructions += " " + freshness
+	}
+
+	if drafts {
+		instructions += " For pre-publication Internet-Drafts, use search_drafts, get_draft_metadata, get_draft_toc, and get_draft_section -- unlike the RFC tools (SQLite only, fully offline), these fetch from the IETF Datatracker/archive over the network on every call and are unavailable when RFC_MCP_DISABLE_DRAFTS=1."
+	}
+
+	return instructions
+}
+
+// freshnessLine reports how current the baked SQLite snapshot is, so an
+// LLM client can judge whether a recently published RFC might be missing:
+// the build timestamp (db.DB.GetMeta("built_at")), the highest RFC number,
+// and the latest publication date in the database. It degrades to omitting
+// the build timestamp for a database built before the meta table existed,
+// and returns "" if the database has no issued RFCs at all (nothing to
+// report) -- either way, serve startup never fails because of this.
+func freshnessLine(d *db.DB, drafts bool) string {
+	result, err := d.ListRFCs("", "", "", "", -1, 0)
+	if err != nil || len(result.RFCs) == 0 {
+		return ""
+	}
+
+	maxNumber := 0
+	maxDate := ""
+	for _, r := range result.RFCs {
+		if r.Number > maxNumber {
+			maxNumber = r.Number
+		}
+		if r.Date > maxDate {
+			maxDate = r.Date
+		}
+	}
+	rangePart := fmt.Sprintf("covers RFC 1-%d", maxNumber)
+	if maxDate != "" {
+		rangePart += fmt.Sprintf(" (latest dated %s)", maxDate)
+	}
+
+	var built string
+	if builtAt, ok := d.GetMeta("built_at"); ok {
+		if t, err := time.Parse(time.RFC3339, builtAt); err == nil {
+			built = "built " + t.Format("2006-01-02") + "; "
+		}
+	}
+
+	line := fmt.Sprintf("Data freshness: RFC database %s%s. RFCs published after the build date are absent -- rebuild with 'rfc-mcp update'.", built, rangePart)
+	if drafts {
+		line += " Draft tools query the IETF Datatracker live and are always current."
+	}
+	return line
+}
+
 func cmdServe(args []string) {
 	defaultTransport := "stdio"
 	if v := os.Getenv("RFC_MCP_TRANSPORT"); v != "" {
@@ -341,12 +402,12 @@ func cmdServe(args []string) {
 	}
 	defer d.Close()
 
+	drafts := draftsEnabled()
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:    "rfc-mcp",
 		Version: version,
 	}, &mcp.ServerOptions{
-		Instructions: "IETF RFC specification server. Use list_rfcs to find RFCs, get_metadata for status/obsoletes/updates/errata summary, get_errata for full errata detail (original/corrected text, notes), get_toc to browse structure, get_section to read content, get_document to read an entire RFC as one paginated document, search for full-text search across all RFCs, and get_references to explore cross-references between RFCs. " +
-			"For pre-publication Internet-Drafts, use search_drafts, get_draft_metadata, get_draft_toc, and get_draft_section -- unlike the RFC tools (SQLite only, fully offline), these fetch from the IETF Datatracker/archive over the network on every call and are unavailable when RFC_MCP_DISABLE_DRAFTS=1.",
+		Instructions: buildInstructions(d, drafts),
 	})
 
 	mcp.AddTool(s, tools.ListRFCsTool, tools.HandleListRFCs(d))
@@ -358,7 +419,7 @@ func cmdServe(args []string) {
 	mcp.AddTool(s, tools.SearchTool, tools.HandleSearch(d))
 	mcp.AddTool(s, tools.GetReferencesTool, tools.HandleGetReferences(d))
 
-	if draftsEnabled() {
+	if drafts {
 		draftClient := &http.Client{Timeout: 30 * time.Second}
 		mcp.AddTool(s, tools.SearchDraftsTool, tools.HandleSearchDrafts(draftClient))
 		mcp.AddTool(s, tools.GetDraftMetadataTool, tools.HandleGetDraftMetadata(draftClient))

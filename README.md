@@ -469,6 +469,9 @@ Generate shell completion scripts: `rfc-mcp completion <bash|zsh|fish>`.
   only RFC numbers not already in the database, and refreshes metadata and
   errata for the whole corpus unconditionally (see the `update` command
   above for the atomic-swap mechanics).
+- Every `build`/`update` stamps a build timestamp in the database, which the
+  MCP server reports to clients (in its Instructions and in "not found"
+  hints) so an LLM can tell how current the baked snapshot is.
 
 A full `build` of the entire corpus (measured 2026-07-11, 16 workers) takes
 about 8 minutes and produces an ~865 MB SQLite database: 9,982 RFC rows

@@ -80,31 +80,36 @@ func (p *Pipeline) applyDefaults() {
 }
 
 // fetchCached fetches path (relative to p.root()) via the on-disk cache,
-// falling back to a live GET (and refreshing the cache) on a miss.
-func (p *Pipeline) fetchCached(ctx context.Context, cacheKey, path string) ([]byte, error) {
-	if data, err := loadCache(cacheKey, defaultCacheTTL); err == nil && data != nil {
-		return data, nil
+// falling back to a live GET (and refreshing the cache) on a miss. The
+// returned time is when the data was actually obtained: the cache file's
+// mtime on a hit, or now (UTC) on a live fetch -- used by loadIndex to
+// record rfc_index_fetched_at provenance.
+func (p *Pipeline) fetchCached(ctx context.Context, cacheKey, path string) ([]byte, time.Time, error) {
+	if data, mtime, err := loadCache(cacheKey, defaultCacheTTL); err == nil && data != nil {
+		return data, mtime, nil
 	}
 	data, err := httpGetWithRetry(ctx, p.Client, p.root()+path)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
+	fetchedAt := time.Now().UTC()
 	if err := saveCache(cacheKey, data); err != nil {
 		log.Printf("warning: failed to cache %s: %v", cacheKey, err)
 	}
-	return data, nil
+	return data, fetchedAt, nil
 }
 
-func (p *Pipeline) loadIndex(ctx context.Context) ([]db.RFC, error) {
-	data, err := p.fetchCached(ctx, indexCacheKey, "/rfc-index.xml")
+func (p *Pipeline) loadIndex(ctx context.Context) ([]db.RFC, time.Time, error) {
+	data, fetchedAt, err := p.fetchCached(ctx, indexCacheKey, "/rfc-index.xml")
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	return rfcindex.Parse(bytes.NewReader(data))
+	rfcs, err := rfcindex.Parse(bytes.NewReader(data))
+	return rfcs, fetchedAt, err
 }
 
 func (p *Pipeline) loadErrata(ctx context.Context) ([]db.Errata, error) {
-	data, err := p.fetchCached(ctx, errataCacheKey, "/errata.json")
+	data, _, err := p.fetchCached(ctx, errataCacheKey, "/errata.json")
 	if err != nil {
 		return nil, err
 	}
@@ -127,12 +132,14 @@ func (p *Pipeline) fetchLive(ctx context.Context, cacheKey, path string) ([]byte
 	return data, nil
 }
 
-func (p *Pipeline) loadIndexLive(ctx context.Context) ([]db.RFC, error) {
+func (p *Pipeline) loadIndexLive(ctx context.Context) ([]db.RFC, time.Time, error) {
 	data, err := p.fetchLive(ctx, indexCacheKey, "/rfc-index.xml")
+	fetchedAt := time.Now().UTC()
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	return rfcindex.Parse(bytes.NewReader(data))
+	rfcs, err := rfcindex.Parse(bytes.NewReader(data))
+	return rfcs, fetchedAt, err
 }
 
 func (p *Pipeline) loadErrataLive(ctx context.Context) ([]db.Errata, error) {
@@ -183,7 +190,7 @@ func issuedNumbersInRange(rfcs []db.RFC, from, to int) (numbers []int, textUnava
 func (p *Pipeline) Run(ctx context.Context, from, to int) error {
 	p.applyDefaults()
 
-	rfcs, err := p.loadIndex(ctx)
+	rfcs, indexFetchedAt, err := p.loadIndex(ctx)
 	if err != nil {
 		return fmt.Errorf("load rfc-index.xml: %w", err)
 	}
@@ -217,7 +224,7 @@ func (p *Pipeline) Run(ctx context.Context, from, to int) error {
 			log.Printf("  %s: %d", k, stats[k])
 		}
 	}
-	return nil
+	return p.recordBuildMeta(indexFetchedAt)
 }
 
 // RunUpdate refreshes rfc-index.xml and errata.json live (see fetchLive),
@@ -229,7 +236,7 @@ func (p *Pipeline) Run(ctx context.Context, from, to int) error {
 func (p *Pipeline) RunUpdate(ctx context.Context) error {
 	p.applyDefaults()
 
-	rfcs, err := p.loadIndexLive(ctx)
+	rfcs, indexFetchedAt, err := p.loadIndexLive(ctx)
 	if err != nil {
 		return fmt.Errorf("load rfc-index.xml: %w", err)
 	}
@@ -277,6 +284,22 @@ func (p *Pipeline) RunUpdate(ctx context.Context) error {
 		if stats[k] > 0 {
 			log.Printf("  %s: %d", k, stats[k])
 		}
+	}
+	return p.recordBuildMeta(indexFetchedAt)
+}
+
+// recordBuildMeta stamps the meta table with build provenance once the
+// corpus insert/refresh transaction has completed successfully: built_at
+// (now, UTC) and rfc_index_fetched_at (when the rfc-index.xml driving this
+// run was obtained -- see loadIndex/loadIndexLive). Surfaced to MCP clients
+// via the server Instructions and the rfcRangeHint suffix (cmd/rfc-mcp,
+// tools package) so an LLM can judge how current the baked snapshot is.
+func (p *Pipeline) recordBuildMeta(indexFetchedAt time.Time) error {
+	if err := p.DB.SetMeta("built_at", time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("set built_at meta: %w", err)
+	}
+	if err := p.DB.SetMeta("rfc_index_fetched_at", indexFetchedAt.UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("set rfc_index_fetched_at meta: %w", err)
 	}
 	return nil
 }
@@ -364,7 +387,7 @@ func (p *Pipeline) processOne(ctx context.Context, number int) (string, error) {
 func (p *Pipeline) Download(ctx context.Context, from, to int) error {
 	p.applyDefaults()
 
-	data, err := p.fetchCached(ctx, indexCacheKey, "/rfc-index.xml")
+	data, _, err := p.fetchCached(ctx, indexCacheKey, "/rfc-index.xml")
 	if err != nil {
 		return fmt.Errorf("load rfc-index.xml: %w", err)
 	}

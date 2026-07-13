@@ -182,6 +182,11 @@ CREATE TABLE IF NOT EXISTS errata (
 );
 
 CREATE INDEX IF NOT EXISTS idx_errata_rfc ON errata(rfc);
+
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 `
 
 // InitSchema creates the database tables, indexes, and triggers.

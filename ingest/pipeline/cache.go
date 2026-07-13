@@ -37,31 +37,34 @@ func CacheDir() (string, error) {
 	return filepath.Join(base, "rfc-mcp"), nil
 }
 
-// loadCache reads a cached file's contents if present and within ttl.
-// Returns nil, nil on a cache miss (missing file or expired) rather than an
-// error, so callers can treat "miss" and "fetch fresh" uniformly.
-func loadCache(key string, ttl time.Duration) ([]byte, error) {
+// loadCache reads a cached file's contents and modification time if present
+// and within ttl. Returns nil data (and a zero time) on a cache miss
+// (missing file or expired) rather than an error, so callers can treat
+// "miss" and "fetch fresh" uniformly. The modification time lets callers
+// record when the cached data was actually obtained (see
+// Pipeline.fetchCached) rather than the time of this read.
+func loadCache(key string, ttl time.Duration) ([]byte, time.Time, error) {
 	dir, err := CacheDir()
 	if err != nil {
-		return nil, nil //nolint:nilerr // cache is best-effort; fall through to a live fetch
+		return nil, time.Time{}, nil //nolint:nilerr // cache is best-effort; fall through to a live fetch
 	}
 
 	path := filepath.Join(dir, key)
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, nil // file doesn't exist
+		return nil, time.Time{}, nil // file doesn't exist
 	}
 	if time.Since(info.ModTime()) > ttl {
-		return nil, nil // expired
+		return nil, time.Time{}, nil // expired
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil
+		return nil, time.Time{}, nil
 	}
 
 	log.Printf("Cache hit: %s (%d bytes)", key, len(data))
-	return data, nil
+	return data, info.ModTime(), nil
 }
 
 // saveCache writes data to a cache file atomically via rename.
