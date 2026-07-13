@@ -67,7 +67,7 @@ func HandleGetSection(d *db.DB) func(ctx context.Context, req *mcp.CallToolReque
 					children, childErr = d.GetDescendantsByPrefix(input.RFC, input.SectionNumber)
 				}
 				if childErr == nil && len(children) > 0 {
-					return textResult(missingSectionGuidance(input.RFC, input.SectionNumber, children, viaParentLink)), nil, nil
+					return textResult(missingSectionGuidance(fmt.Sprintf("RFC %d", input.RFC), input.SectionNumber, children, viaParentLink)), nil, nil
 				}
 				return errorResult(fmt.Sprintf("section %q not found in RFC %d", input.SectionNumber, input.RFC)), nil, nil
 			}
@@ -123,16 +123,18 @@ func emptyParentGuidance(s db.Section, children []db.SectionChild) string {
 }
 
 // missingSectionGuidance describes a queried section number that has no
-// heading of its own anywhere in the RFC, found via GetChildren (a
-// heading still pointing at it as ParentNumber) or GetDescendantsByPrefix
-// (nothing does, but numbered descendants exist), so the caller gets a
-// pointer to real content instead of a bare not-found error.
-// include_subsections=true is only offered when viaParentLink is true --
-// otherwise the ParentNumber chain that flag walks doesn't lead to these
-// children any more (see the call site).
-func missingSectionGuidance(rfc int, number string, children []db.SectionChild, viaParentLink bool) string {
+// heading of its own anywhere in the document (an RFC identified by
+// label "RFC %d", or a draft identified by its name+revision -- see
+// get_draft_section.go), found via GetChildren (a heading still pointing
+// at it as ParentNumber) or GetDescendantsByPrefix (nothing does, but
+// numbered descendants exist), so the caller gets a pointer to real
+// content instead of a bare not-found error. include_subsections=true is
+// only offered when viaParentLink is true -- otherwise the ParentNumber
+// chain that flag walks doesn't lead to these children any more (see the
+// call site).
+func missingSectionGuidance(label, number string, children []db.SectionChild, viaParentLink bool) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Section %s has no heading of its own in RFC %d. It has %d subsection", number, rfc, len(children))
+	fmt.Fprintf(&sb, "Section %s has no heading of its own in %s. It has %d subsection", number, label, len(children))
 	if len(children) != 1 {
 		sb.WriteString("s")
 	}

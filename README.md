@@ -291,6 +291,78 @@ resolved to a specific section (e.g. via a numeric bracket citation like
 `[9]` resolved through the References section); a bare `RFC 793` mention
 without a section number omits them.
 
+### Internet-Drafts
+
+Unlike the RFC tools above (SQLite only, fully offline), these tools fetch
+directly from the [IETF Datatracker](https://datatracker.ietf.org/) and the
+[IETF document archive](https://www.ietf.org/archive/id/) over the network
+on every call — there's no local Internet-Draft database. Set
+`RFC_MCP_DISABLE_DRAFTS=1` to skip registering them entirely for
+offline/no-egress deployments.
+
+| Tool | Description | Key Parameters |
+|------|-------------|----------------|
+| `search_drafts` | Search Internet-Drafts by title/name substring and/or working group | `query`, `name_contains`, `group`, `include_expired`, `limit`, `offset` |
+| `get_draft_metadata` | Title, abstract, page count, submission/expiry dates, and (if published) the resulting RFC number | `name` (required) |
+| `get_draft_toc` | Table of contents of a draft | `name` (required), `revision` |
+| `get_draft_section` | Section content, addressed and paginated the same way as `get_section` | `name` (required), `revision`, `section_number` (required), `include_subsections`, `offset`, `max_lines`, `max_chars` |
+
+`name` accepts both a bare draft name (`draft-ietf-quic-transport`) and one
+with an explicit revision suffix (`draft-ietf-quic-transport-34`); all four
+tools resolve to the latest revision unless one is given explicitly (via
+`revision`, or embedded directly in `name`).
+
+`search_drafts(query: "quic", group: "quic")` returns:
+
+```json
+{
+  "drafts": [
+    {
+      "name": "draft-ietf-quic-multipath",
+      "rev": "21",
+      "title": "Managing multiple paths for a QUIC connection",
+      "expires": "2026-09-18T09:40:37Z",
+      "pages": 42
+    }
+  ],
+  "total_count": 1,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+Only `Active` drafts are returned by default; set `include_expired: true`
+to widen the search to every lifecycle state (expired, replaced, and
+drafts already published as an RFC).
+
+`get_draft_metadata(name: "draft-ietf-quic-transport")` returns:
+
+```json
+{
+  "name": "draft-ietf-quic-transport",
+  "rev": "34",
+  "title": "QUIC: A UDP-Based Multiplexed and Secure Transport",
+  "abstract": "This document defines the core of the QUIC transport protocol. ...",
+  "pages": 151,
+  "time": "2022-02-19T08:46:51Z",
+  "expires": "2021-07-19T02:14:40Z",
+  "rfc": 9000,
+  "hint": "This draft was published as RFC 9000; use get_metadata/get_toc/get_section/get_document with rfc=9000 instead."
+}
+```
+
+`rfc`/`hint` are only present once a draft has been published as an RFC;
+`expires` is surfaced as-is even when it's in the past, since a draft's own
+submission metadata is never edited after the fact. `get_draft_toc` and
+`get_draft_section` follow the exact same table-of-contents/pagination
+shape as `get_toc`/`get_section` (see above), just addressed by draft
+`name`/`revision` instead of an RFC number.
+
+Draft plain-text bodies are cached on disk forever per revision (a specific
+revision never changes once submitted); Datatracker metadata (latest
+revision, title, abstract, expiry) is cached for 1 hour — shorter than the
+RFC tools' 24-hour `rfc-index.xml` cache, since drafts move faster.
+
 ## Command Reference
 
 ### `serve`
@@ -303,6 +375,13 @@ Start the MCP server.
 | `--transport` (`-t`) | Transport type: `stdio` or `http` (env: `RFC_MCP_TRANSPORT`; defaults to `http` when `PORT` is set) | `stdio` |
 | `--addr` | HTTP listen address (env: `RFC_MCP_ADDR`, or `PORT` interpreted as `:$PORT`) | `:8080` |
 | `--bearer-token` | Bearer token for HTTP auth (env: `RFC_MCP_BEARER_TOKEN`) | |
+
+Set `RFC_MCP_DISABLE_DRAFTS=1` to skip registering the
+[Internet-Draft tools](#internet-drafts) (`search_drafts`,
+`get_draft_metadata`, `get_draft_toc`, `get_draft_section`) — useful for
+offline or no-egress deployments, since unlike the RFC tools they perform
+live network requests to the IETF Datatracker/archive on every call. No
+corresponding flag; env var only.
 
 ### `build`
 
@@ -395,6 +474,14 @@ A full `build` of the entire corpus (measured 2026-07-11, 16 workers) takes
 about 8 minutes and produces an ~865 MB SQLite database: 9,982 RFC rows
 (9,794 issued + 188 not-issued), 321,372 sections, 284,869 extracted
 cross-references, and 7,961 errata records.
+
+Internet-Drafts (see [Internet-Drafts](#internet-drafts) above) are never
+part of this database — the `search_drafts`/`get_draft_*` tools fetch from
+the [IETF Datatracker](https://datatracker.ietf.org/) and
+[archive](https://www.ietf.org/archive/id/) on demand instead, with their
+own cache: draft bodies forever per revision, Datatracker metadata for 1
+hour. Both live under the same `$XDG_CACHE_HOME/rfc-mcp` root as
+`rfc-index.xml`/`errata.json`/`--raw-dir`, under a `drafts/` subdirectory.
 
 ## Limitations
 

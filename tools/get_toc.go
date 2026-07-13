@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/higebu/rfc-mcp/db"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -33,13 +32,7 @@ func HandleGetTOC(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, 
 			return errorResult(rfcNotFoundError(d, input.RFC)), nil, nil
 		}
 
-		var sb strings.Builder
-		fmt.Fprintf(&sb, "# RFC %d - Table of Contents\n\n", input.RFC)
-		for _, s := range sections {
-			indent := strings.Repeat("  ", s.Level-1)
-			fmt.Fprintf(&sb, "%s- %s %s\n", indent, s.Number, s.Title)
-		}
-
-		return textResult(sb.String()), nil, nil
+		header := fmt.Sprintf("# RFC %d - Table of Contents\n\n", input.RFC)
+		return textResult(formatTOC(header, sections)), nil, nil
 	}
 }

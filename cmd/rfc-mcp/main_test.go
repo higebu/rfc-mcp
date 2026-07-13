@@ -14,6 +14,34 @@ import (
 	"github.com/higebu/rfc-mcp/db"
 )
 
+// TestDraftsEnabled covers the RFC_MCP_DISABLE_DRAFTS knob cmdServe reads
+// before registering search_drafts/get_draft_metadata/get_draft_toc/
+// get_draft_section: unset or any value other than exactly "1" leaves the
+// draft tools registered, only "1" disables them.
+func TestDraftsEnabled(t *testing.T) {
+	tests := []struct {
+		name string
+		val  string
+		set  bool
+		want bool
+	}{
+		{"unset defaults to enabled", "", false, true},
+		{"disabled", "1", true, false},
+		{"any other value stays enabled", "true", true, true},
+		{"empty string stays enabled", "", true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.set {
+				t.Setenv("RFC_MCP_DISABLE_DRAFTS", tt.val)
+			}
+			if got := draftsEnabled(); got != tt.want {
+				t.Errorf("draftsEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHealthHandler(t *testing.T) {
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()

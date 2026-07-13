@@ -4,10 +4,24 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/higebu/rfc-mcp/db"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const defaultMaxLines = 200
+
+// formatTOC renders a Table-of-Contents listing for sections as an
+// indented bullet list, prefixed by header (e.g. "# RFC 4271 - Table of
+// Contents\n\n"). Shared by get_toc and get_draft_toc.
+func formatTOC(header string, sections []db.Section) string {
+	var sb strings.Builder
+	sb.WriteString(header)
+	for _, s := range sections {
+		indent := strings.Repeat("  ", s.Level-1)
+		fmt.Fprintf(&sb, "%s- %s %s\n", indent, s.Number, s.Title)
+	}
+	return sb.String()
+}
 
 func textResult(text string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{

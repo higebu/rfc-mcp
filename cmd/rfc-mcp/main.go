@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/higebu/rfc-mcp/db"
+	"github.com/higebu/rfc-mcp/ingest/drafts"
 	"github.com/higebu/rfc-mcp/ingest/pipeline"
 	"github.com/higebu/rfc-mcp/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -45,6 +46,7 @@ func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
 
 func main() {
 	pipeline.Version = version
+	drafts.Version = version
 
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, usage)
@@ -294,6 +296,16 @@ func cmdImportDir(args []string) {
 	}
 }
 
+// draftsEnabled reports whether the Internet-Draft tools (search_drafts,
+// get_draft_metadata, get_draft_toc, get_draft_section) should be
+// registered. Set RFC_MCP_DISABLE_DRAFTS=1 to skip them entirely for
+// offline/no-egress deployments -- unlike the RFC tools (SQLite only),
+// draft tools perform live network requests to the IETF Datatracker/
+// archive at call time.
+func draftsEnabled() bool {
+	return os.Getenv("RFC_MCP_DISABLE_DRAFTS") != "1"
+}
+
 func cmdServe(args []string) {
 	defaultTransport := "stdio"
 	if v := os.Getenv("RFC_MCP_TRANSPORT"); v != "" {
@@ -333,7 +345,8 @@ func cmdServe(args []string) {
 		Name:    "rfc-mcp",
 		Version: version,
 	}, &mcp.ServerOptions{
-		Instructions: "IETF RFC specification server. Use list_rfcs to find RFCs, get_metadata for status/obsoletes/updates/errata summary, get_errata for full errata detail (original/corrected text, notes), get_toc to browse structure, get_section to read content, get_document to read an entire RFC as one paginated document, search for full-text search across all RFCs, and get_references to explore cross-references between RFCs.",
+		Instructions: "IETF RFC specification server. Use list_rfcs to find RFCs, get_metadata for status/obsoletes/updates/errata summary, get_errata for full errata detail (original/corrected text, notes), get_toc to browse structure, get_section to read content, get_document to read an entire RFC as one paginated document, search for full-text search across all RFCs, and get_references to explore cross-references between RFCs. " +
+			"For pre-publication Internet-Drafts, use search_drafts, get_draft_metadata, get_draft_toc, and get_draft_section -- unlike the RFC tools (SQLite only, fully offline), these fetch from the IETF Datatracker/archive over the network on every call and are unavailable when RFC_MCP_DISABLE_DRAFTS=1.",
 	})
 
 	mcp.AddTool(s, tools.ListRFCsTool, tools.HandleListRFCs(d))
@@ -344,6 +357,14 @@ func cmdServe(args []string) {
 	mcp.AddTool(s, tools.GetDocumentTool, tools.HandleGetDocument(d))
 	mcp.AddTool(s, tools.SearchTool, tools.HandleSearch(d))
 	mcp.AddTool(s, tools.GetReferencesTool, tools.HandleGetReferences(d))
+
+	if draftsEnabled() {
+		draftClient := &http.Client{Timeout: 30 * time.Second}
+		mcp.AddTool(s, tools.SearchDraftsTool, tools.HandleSearchDrafts(draftClient))
+		mcp.AddTool(s, tools.GetDraftMetadataTool, tools.HandleGetDraftMetadata(draftClient))
+		mcp.AddTool(s, tools.GetDraftTOCTool, tools.HandleGetDraftTOC(draftClient))
+		mcp.AddTool(s, tools.GetDraftSectionTool, tools.HandleGetDraftSection(draftClient))
+	}
 
 	switch *transport {
 	case "stdio":

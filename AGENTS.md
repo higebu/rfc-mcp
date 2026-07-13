@@ -24,8 +24,9 @@ ingest/
   errata/             # errata.json parser
   rfctxt/             # Plain-text RFC section parser (column-0 headings, TOC-anchor, whole-body fallback)
   pipeline/           # Download + cache + build/update orchestration
+  drafts/             # On-demand Internet-Draft fetch: Datatracker search/metadata + archive body, own on-disk cache
 db/                   # SQLite schema, queries, FTS5 full-text search, reference extraction
-tools/                # MCP tool handlers (list_rfcs, get_metadata, get_errata, get_toc, get_section, get_document, search, get_references)
+tools/                # MCP tool handlers (list_rfcs, get_metadata, get_errata, get_toc, get_section, get_document, search, get_references, search_drafts, get_draft_metadata, get_draft_toc, get_draft_section)
 internal/testutil/    # Shared test helpers (SeedData for a small real-RFC fixture DB)
 data/                 # Database files (gitignored except .gitkeep)
 examples/systemd/     # Deployment examples (service + timer)
@@ -89,9 +90,20 @@ The core feature is a pipeline (`ingest/pipeline/`) that:
 Uses a worker pool (`runtime.NumCPU()` workers by default) for parallel
 per-RFC fetch+parse.
 
+### Internet-Drafts
+
+`ingest/drafts/` fetches Internet-Draft search results, metadata, and
+plain-text bodies from the IETF Datatracker and archive on demand, at MCP
+call time -- unlike the pipeline above, nothing is imported into SQLite
+(drafts move too fast to be worth it). Draft bodies are cached on disk
+forever per revision (immutable once submitted); Datatracker metadata is
+cached for 1 hour (vs. the pipeline's 24h `rfc-index.xml` TTL). Set
+`RFC_MCP_DISABLE_DRAFTS=1` to skip registering the draft tools for
+offline/no-egress deployments.
+
 ### MCP Tools
 
-Eight tools are exposed via MCP:
+Twelve tools are exposed via MCP:
 
 | Tool | Description |
 |------|-------------|
@@ -103,6 +115,10 @@ Eight tools are exposed via MCP:
 | `get_document` | Full text of an RFC as one paginated document |
 | `search` | Full-text search across all RFCs (FTS5 syntax) |
 | `get_references` | Cross-references between RFCs (outgoing/incoming) |
+| `search_drafts` | Search Internet-Drafts by title/name substring and/or working group (fetched on demand) |
+| `get_draft_metadata` | Title, abstract, page count, submission/expiry dates, and the RFC number if published |
+| `get_draft_toc` | Table of contents (section structure) for an Internet-Draft |
+| `get_draft_section` | Section content (paginated), addressed the same way as `get_section` |
 
 ### Transport
 
@@ -150,5 +166,6 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR to `main`:
 | `RFC_MCP_BEARER_TOKEN` | Bearer token for HTTP transport auth |
 | `PORT` | PaaS convention (Cloud Run / Heroku). When set, `serve` defaults to HTTP transport and binds to `:$PORT`. `RFC_MCP_*` and CLI flags take precedence |
 | `RFC_MCP_CACHE_TTL_HOURS` | Cache TTL in hours for `rfc-index.xml` / `errata.json` (default: 24). Per-RFC text bodies are cached indefinitely, independent of this setting |
-| `RFC_MCP_MAX_TXT_SIZE_MB` | Max response size for any single HTTP GET (default: 20 MB) |
+| `RFC_MCP_MAX_TXT_SIZE_MB` | Max response size for any single HTTP GET (default: 20 MB); also caps `ingest/drafts` fetches |
+| `RFC_MCP_DISABLE_DRAFTS` | Set to `1` to skip registering the Internet-Draft tools (`search_drafts`, `get_draft_metadata`, `get_draft_toc`, `get_draft_section`) for offline/no-egress deployments |
 | `XDG_CACHE_HOME` | Override cache directory (follows XDG Base Directory spec) |

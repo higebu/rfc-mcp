@@ -1,0 +1,51 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+
+	"github.com/higebu/rfc-mcp/ingest/drafts"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+type SearchDraftsInput struct {
+	Query          string `json:"query,omitempty" jsonschema:"Filter by a case-insensitive substring of the draft title"`
+	NameContains   string `json:"name_contains,omitempty" jsonschema:"Filter by a substring of the draft name (e.g. 'quic-transport')"`
+	Group          string `json:"group,omitempty" jsonschema:"Filter by working group acronym (e.g. quic, idr)"`
+	IncludeExpired bool   `json:"include_expired,omitempty" jsonschema:"Include drafts in any lifecycle state (expired, replaced, published as an RFC, ...), not just Active (default: false)"`
+	Limit          int    `json:"limit,omitempty" jsonschema:"Maximum number of results to return (default: 20)"`
+	Offset         int    `json:"offset,omitempty" jsonschema:"Number of results to skip for pagination (default: 0)"`
+}
+
+var SearchDraftsTool = &mcp.Tool{
+	Name: "search_drafts",
+	Description: "Search Internet-Drafts by title/name substring and/or working group, fetched on demand from " +
+		"the IETF Datatracker. Only Active drafts are returned by default; set include_expired to widen the " +
+		"search to every lifecycle state. Results are paginated (default 20 per page); use limit and offset " +
+		"to navigate. Use get_draft_metadata/get_draft_toc/get_draft_section to read a specific draft found here.",
+}
+
+func HandleSearchDrafts(client *http.Client) func(ctx context.Context, req *mcp.CallToolRequest, input SearchDraftsInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, req *mcp.CallToolRequest, input SearchDraftsInput) (*mcp.CallToolResult, any, error) {
+		result, err := drafts.SearchDrafts(ctx, client, drafts.SearchParams{
+			Query:          input.Query,
+			NameContains:   input.NameContains,
+			Group:          input.Group,
+			IncludeExpired: input.IncludeExpired,
+			Limit:          input.Limit,
+			Offset:         input.Offset,
+		})
+		if err != nil {
+			return errorResult(fmt.Sprintf("failed to search drafts: %v", err)), nil, nil
+		}
+
+		data, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return errorResult(fmt.Sprintf("failed to marshal: %v", err)), nil, nil
+		}
+
+		return textResult(string(data)), nil, nil
+	}
+}
