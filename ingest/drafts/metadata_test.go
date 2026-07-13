@@ -89,6 +89,34 @@ func TestFetchMetadata_Published(t *testing.T) {
 	}
 }
 
+// TestFetchMetadata_PublishedNullAlias covers the modern Datatracker row
+// shape: became_rfc rows for every RFC published since the docalias
+// removal (live-verified: rfc9793, rfc10014) carry
+// originaltargetaliasname null, naming the RFC only via the target URI.
+func TestFetchMetadata_PublishedNullAlias(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/doc/document/draft-ietf-quic-transport/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(publishedMetaBody))
+	})
+	mux.HandleFunc("/api/v1/doc/relateddocument/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"meta": {"total_count": 1}, "objects": [
+			{"originaltargetaliasname": null, "target": "/api/v1/doc/document/rfc9000/"}
+		]}`))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	withTestRoots(t, ts.URL)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	meta, err := FetchMetadata(context.Background(), ts.Client(), "draft-ietf-quic-transport")
+	if err != nil {
+		t.Fatalf("FetchMetadata: %v", err)
+	}
+	if meta.RFC != 9000 {
+		t.Errorf("RFC = %d, want 9000 (derived from the target URI when the alias is null)", meta.RFC)
+	}
+}
+
 func TestFetchMetadata_CacheHit(t *testing.T) {
 	var metaRequests atomic.Int32
 	mux := http.NewServeMux()

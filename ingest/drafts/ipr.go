@@ -151,9 +151,9 @@ func draftForRFC(ctx context.Context, client *http.Client, rfcName string) (stri
 // replacedDrafts returns the draft name(s) that name directly replaces
 // (one hop only, matching FetchIPR's fan-out rule -- a replaced draft's
 // own replaces chain is not followed). Reuses metadata.go's
-// rawRelatedDocumentResponse: for this relationship/direction
-// originaltargetaliasname already carries the replaced draft's plain name,
-// the same shape becameRFC relies on for its forward became_rfc lookup.
+// rawRelatedDocumentResponse; see relatedTargetName for why the replaced
+// draft's name can live in either originaltargetaliasname or the target
+// document URI depending on the row's age.
 func replacedDrafts(ctx context.Context, client *http.Client, name string) ([]string, error) {
 	q := url.Values{}
 	q.Set("source__name", name)
@@ -172,7 +172,7 @@ func replacedDrafts(ctx context.Context, client *http.Client, name string) ([]st
 	}
 	out := make([]string, 0, len(raw.Objects))
 	for _, o := range raw.Objects {
-		out = append(out, o.OriginalTargetAliasName)
+		out = append(out, relatedTargetName(o.OriginalTargetAliasName, o.Target))
 	}
 	return out, nil
 }

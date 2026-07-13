@@ -42,8 +42,12 @@ func newIPRTestServer(t *testing.T, iprRequests *atomic.Int32) *httptest.Server 
 				{"source": "/api/v1/doc/document/draft-example-ipr/", "target": "/api/v1/doc/document/rfc9999/", "originaltargetaliasname": "rfc9999"}
 			]}`))
 		case q.Get("relationship__slug") == "replaces" && q.Get("source__name") == "draft-example-ipr":
+			// Modern Datatracker rows leave originaltargetaliasname null
+			// and only name the replaced draft via the target URI
+			// (regression: draft-ietf-bess-mup-safi's predecessor was
+			// silently skipped when only the alias field was read).
 			_, _ = w.Write([]byte(`{"meta": {"total_count": 1}, "objects": [
-				{"originaltargetaliasname": "draft-example-ipr-old"}
+				{"originaltargetaliasname": null, "target": "/api/v1/doc/document/draft-example-ipr-old/"}
 			]}`))
 		default:
 			_, _ = w.Write([]byte(`{"meta": {"total_count": 0}, "objects": []}`))

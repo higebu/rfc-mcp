@@ -83,7 +83,21 @@ func FetchMetadata(ctx context.Context, client *http.Client, name string) (Metad
 type rawRelatedDocumentResponse struct {
 	Objects []struct {
 		OriginalTargetAliasName string `json:"originaltargetaliasname"`
+		Target                  string `json:"target"`
 	} `json:"objects"`
+}
+
+// relatedTargetName returns the plain document name of a relateddocument
+// row's target. Rows written before the Datatracker dropped its docalias
+// model carry it in originaltargetaliasname; newer rows (live-verified
+// 2026-07-14: draft-ietf-bess-mup-safi's replaces row, and the became_rfc
+// rows of every 2025+ RFC checked, e.g. rfc9793/rfc10014) leave that
+// field null and only name the target via its document URI.
+func relatedTargetName(aliasName, targetURI string) string {
+	if aliasName != "" {
+		return aliasName
+	}
+	return lastPathSegment(targetURI)
 }
 
 // rfcNumberFromAlias parses a Datatracker alias like "rfc9000" into 9000.
@@ -122,9 +136,10 @@ func becameRFC(ctx context.Context, client *http.Client, name string) (int, erro
 	if len(raw.Objects) == 0 {
 		return 0, fmt.Errorf("no became_rfc relationship for %s", name)
 	}
-	n, ok := rfcNumberFromAlias(raw.Objects[0].OriginalTargetAliasName)
+	targetName := relatedTargetName(raw.Objects[0].OriginalTargetAliasName, raw.Objects[0].Target)
+	n, ok := rfcNumberFromAlias(targetName)
 	if !ok {
-		return 0, fmt.Errorf("unexpected became_rfc alias %q for %s", raw.Objects[0].OriginalTargetAliasName, name)
+		return 0, fmt.Errorf("unexpected became_rfc target %q for %s", targetName, name)
 	}
 	return n, nil
 }
