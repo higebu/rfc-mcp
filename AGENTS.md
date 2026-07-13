@@ -25,7 +25,7 @@ ingest/
   rfctxt/             # Plain-text RFC section parser (column-0 headings, TOC-anchor, whole-body fallback)
   pipeline/           # Download + cache + build/update orchestration
 db/                   # SQLite schema, queries, FTS5 full-text search, reference extraction
-tools/                # MCP tool handlers (list_rfcs, get_metadata, get_toc, get_section, get_document, search, get_references)
+tools/                # MCP tool handlers (list_rfcs, get_metadata, get_errata, get_toc, get_section, get_document, search, get_references)
 internal/testutil/    # Shared test helpers (SeedData for a small real-RFC fixture DB)
 data/                 # Database files (gitignored except .gitkeep)
 examples/systemd/     # Deployment examples (service + timer)
@@ -91,12 +91,13 @@ per-RFC fetch+parse.
 
 ### MCP Tools
 
-Seven tools are exposed via MCP:
+Eight tools are exposed via MCP:
 
 | Tool | Description |
 |------|-------------|
 | `list_rfcs` | List RFCs, filterable by title substring, stream, status, working group |
 | `get_metadata` | Title, status, dates, obsoletes/updates relationships, compact errata summary |
+| `get_errata` | Full errata detail for an RFC (original/corrected text, notes), filterable by status, type, section |
 | `get_toc` | Table of contents (section structure) for an RFC |
 | `get_section` | Section content (paginated), addressed by number or slug |
 | `get_document` | Full text of an RFC as one paginated document |

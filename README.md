@@ -165,6 +165,7 @@ See [`examples/systemd/`](examples/systemd/) for production deployment with syst
 |------|-------------|----------------|
 | `list_rfcs` | List RFCs, optionally filtered | `query` (title substring), `stream`, `status`, `wg`, `limit`, `offset` |
 | `get_metadata` | Title, status, dates, obsoletes/updates, errata | `rfc` (required) |
+| `get_errata` | Full errata detail (original/corrected text, notes, submitter, dates) | `rfc` (required), `status`, `type`, `section` |
 | `get_toc` | Table of contents of an RFC | `rfc` (required) |
 | `get_section` | Section content, each section prefixed with its heading line (paginated). A title-only section fetched without `include_subsections` returns a summary of its subsections instead of empty text | `rfc`, `section_number` (required), `include_subsections`, `offset`, `max_lines`, `max_chars` |
 | `get_document` | Full text of an RFC as one document (paginated) | `rfc` (required), `offset`, `max_lines`, `max_chars` |
@@ -200,6 +201,32 @@ See [`examples/systemd/`](examples/systemd/) for production deployment with syst
 upper-case (`DRAFT STANDARD`); `list_rfcs` returns the raw upper-case form.
 Errata are a compact summary (id/status/type/section only) — follow
 `errata_url` for the full original/corrected text of a specific erratum.
+
+`get_errata(rfc: 9293, type: "Editorial")` returns the full detail behind
+that summary, filterable by `status`, `type`, and/or `section`
+(case-insensitive; `section` ignores a trailing `.` on either side, since
+the source data is inconsistent about it):
+
+```json
+[
+  {
+    "id": 8126,
+    "rfc": 9293,
+    "status": "Verified",
+    "type": "Editorial",
+    "section": "3.3.1",
+    "orig_text": "the sequence space labeled 3 in Figure 3",
+    "correct_text": "the sequence space labeled 2 and 3 in Figure 3",
+    "notes": "In Figure 3, the send window shoud be 2(sequence numbers of unacknowledged data) and 3(sequence numbers allowed for new data transmission).",
+    "submitted_date": "2024-10-01",
+    "submitter_name": "zhihua.li",
+    "verifier_name": "Zaheduzzaman Sarker",
+    "updated_date": "2025-03-18 08:36:20"
+  }
+]
+```
+
+An RFC with no matching errata returns `[]`, not an error.
 
 ### Searching
 

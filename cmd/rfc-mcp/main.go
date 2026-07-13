@@ -333,11 +333,12 @@ func cmdServe(args []string) {
 		Name:    "rfc-mcp",
 		Version: version,
 	}, &mcp.ServerOptions{
-		Instructions: "IETF RFC specification server. Use list_rfcs to find RFCs, get_metadata for status/obsoletes/updates/errata info, get_toc to browse structure, get_section to read content, get_document to read an entire RFC as one paginated document, search for full-text search across all RFCs, and get_references to explore cross-references between RFCs.",
+		Instructions: "IETF RFC specification server. Use list_rfcs to find RFCs, get_metadata for status/obsoletes/updates/errata summary, get_errata for full errata detail (original/corrected text, notes), get_toc to browse structure, get_section to read content, get_document to read an entire RFC as one paginated document, search for full-text search across all RFCs, and get_references to explore cross-references between RFCs.",
 	})
 
 	mcp.AddTool(s, tools.ListRFCsTool, tools.HandleListRFCs(d))
 	mcp.AddTool(s, tools.GetMetadataTool, tools.HandleGetMetadata(d))
+	mcp.AddTool(s, tools.GetErrataTool, tools.HandleGetErrata(d))
 	mcp.AddTool(s, tools.GetTOCTool, tools.HandleGetTOC(d))
 	mcp.AddTool(s, tools.GetSectionTool, tools.HandleGetSection(d))
 	mcp.AddTool(s, tools.GetDocumentTool, tools.HandleGetDocument(d))

@@ -196,6 +196,157 @@ func TestHandleGetMetadata(t *testing.T) {
 	})
 }
 
+func TestHandleGetErrata(t *testing.T) {
+	d := setupTestDB(t)
+	handler := HandleGetErrata(d)
+
+	t.Run("basic retrieval returns full detail", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetErrataInput{RFC: 4271})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("unexpected error result: %s", getTextContent(result))
+		}
+
+		var out []db.Errata
+		if err := json.Unmarshal([]byte(getTextContent(result)), &out); err != nil {
+			t.Fatalf("failed to unmarshal output: %v\n%s", err, getTextContent(result))
+		}
+		if len(out) != 2 {
+			t.Fatalf("expected 2 errata, got %d: %+v", len(out), out)
+		}
+		if out[0].ID != 1 || out[0].OrigText == "" || out[0].CorrectText == "" {
+			t.Errorf("expected full orig_text/correct_text for errata 1, got: %+v", out[0])
+		}
+	})
+
+	t.Run("status filter is case-insensitive", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetErrataInput{RFC: 4271, Status: "verified"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, `"id": 1`) {
+			t.Errorf("expected errata 1 in output, got: %s", text)
+		}
+		if strings.Contains(text, `"id": 2`) {
+			t.Errorf("expected errata 2 filtered out, got: %s", text)
+		}
+	})
+
+	t.Run("type filter is case-insensitive", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetErrataInput{RFC: 4271, Type: "editorial"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, `"id": 2`) {
+			t.Errorf("expected errata 2 in output, got: %s", text)
+		}
+		if strings.Contains(text, `"id": 1`) {
+			t.Errorf("expected errata 1 filtered out, got: %s", text)
+		}
+	})
+
+	t.Run("section filter", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetErrataInput{RFC: 4271, Section: "5.1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, `"id": 1`) {
+			t.Errorf("expected errata 1 in output, got: %s", text)
+		}
+		if strings.Contains(text, `"id": 2`) {
+			t.Errorf("expected errata 2 (section 5) filtered out, got: %s", text)
+		}
+	})
+
+	// errata.json is inconsistent about a trailing "." on section numbers
+	// for the same document (e.g. "3.3.2." vs "3.3.1" on real RFC 9293
+	// data); the section filter must ignore it on either side.
+	t.Run("section filter ignores trailing dot", func(t *testing.T) {
+		d := setupTestDB(t)
+		if err := d.Exec(`INSERT INTO errata (id, rfc, status, type, section, orig_text, correct_text) VALUES
+			(200, 9293, 'Verified', 'Editorial', '3.3.2.', 'old', 'new')`); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		handler := HandleGetErrata(d)
+
+		result, _, err := handler(context.Background(), nil, GetErrataInput{RFC: 9293, Section: "3.3.2"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(getTextContent(result), `"id": 200`) {
+			t.Errorf("expected errata 200 to match despite trailing dot, got: %s", getTextContent(result))
+		}
+	})
+
+	t.Run("filter matching nothing returns empty array, not an error", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetErrataInput{RFC: 4271, Status: "Rejected"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("unexpected error result: %s", getTextContent(result))
+		}
+		if getTextContent(result) != "[]" {
+			t.Errorf("expected empty array, got: %s", getTextContent(result))
+		}
+	})
+
+	t.Run("rfc with no errata returns empty array, not an error", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetErrataInput{RFC: 9293})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("unexpected error result: %s", getTextContent(result))
+		}
+		if getTextContent(result) != "[]" {
+			t.Errorf("expected empty array, got: %s", getTextContent(result))
+		}
+	})
+
+	t.Run("not issued", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetErrataInput{RFC: 9999})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError {
+			t.Fatal("expected error result for not-issued RFC")
+		}
+		if !strings.Contains(getTextContent(result), "was never issued") {
+			t.Errorf("expected 'was never issued' message, got: %s", getTextContent(result))
+		}
+	})
+
+	t.Run("unknown RFC", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetErrataInput{RFC: 999999})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError {
+			t.Fatal("expected error result for unknown RFC")
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "not found") || !strings.Contains(text, "range from 1 to 9293") {
+			t.Errorf("expected not-found message with range hint, got: %s", text)
+		}
+	})
+
+	t.Run("rfc required", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetErrataInput{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError {
+			t.Error("expected error result for missing rfc")
+		}
+	})
+}
+
 func TestHandleGetTOC(t *testing.T) {
 	d := setupTestDB(t)
 	handler := HandleGetTOC(d)
