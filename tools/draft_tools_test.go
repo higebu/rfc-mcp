@@ -405,6 +405,170 @@ func TestHandleGetDraftSection(t *testing.T) {
 	})
 }
 
+// newGetIPRTestServer serves the Datatracker endpoints HandleGetIPR's
+// underlying drafts.FetchIPR hits: document existence checks, an empty
+// became_rfc/replaces relateddocument response (the fan-out itself is
+// covered by ingest/drafts's own tests; this only needs to prove the tool
+// layer wires rfc/name through correctly), and one posted disclosure each
+// for rfc9000 and draft-ipr-example.
+func newGetIPRTestServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/api/v1/doc/document/rfc9000/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"name": "rfc9000"}`))
+	})
+	mux.HandleFunc("/api/v1/doc/document/rfc7000/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"name": "rfc7000"}`))
+	})
+	mux.HandleFunc("/api/v1/doc/document/draft-ipr-example/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"name": "draft-ipr-example"}`))
+	})
+	mux.HandleFunc("/api/v1/doc/document/rfc404/", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	mux.HandleFunc("/api/v1/doc/relateddocument/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"meta": {"total_count": 0}, "objects": []}`))
+	})
+	mux.HandleFunc("/api/v1/ipr/holderiprdisclosure/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("docs__name") {
+		case "rfc9000":
+			_, _ = w.Write([]byte(`{"objects": [
+				{"id": 900, "title": "Disclosure against RFC 9000", "state": "/api/v1/name/iprdisclosurestatename/posted/",
+				 "holder_legal_name": "Acme Corp", "licensing": "/api/v1/name/iprlicensetypename/reasonable/",
+				 "has_patent_pending": true, "patent_info": "US0000000", "time": "2022-01-01T00:00:00Z",
+				 "docs": ["/api/v1/doc/document/rfc9000/"]}
+			]}`))
+		case "draft-ipr-example":
+			_, _ = w.Write([]byte(`{"objects": [
+				{"id": 901, "title": "Disclosure against the draft", "state": "/api/v1/name/iprdisclosurestatename/posted/",
+				 "holder_legal_name": "Beta LLC", "has_patent_pending": false, "time": "2023-01-01T00:00:00Z",
+				 "docs": ["/api/v1/doc/document/draft-ipr-example/"]}
+			]}`))
+		default:
+			_, _ = w.Write([]byte(`{"objects": []}`))
+		}
+	})
+	mux.HandleFunc("/api/v1/ipr/thirdpartyiprdisclosure/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"objects": []}`))
+	})
+	mux.HandleFunc("/api/v1/ipr/genericiprdisclosure/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"objects": []}`))
+	})
+
+	return httptest.NewServer(mux)
+}
+
+func TestHandleGetIPR(t *testing.T) {
+	ts := newGetIPRTestServer(t)
+	defer ts.Close()
+	restore := redirectDraftsRoots(t, ts.URL)
+	defer restore()
+
+	handler := HandleGetIPR(ts.Client())
+
+	t.Run("by rfc", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetIPRInput{RFC: 9000})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("unexpected error result: %s", getTextContent(result))
+		}
+		var out drafts.IPRResult
+		if unmarshalErr := json.Unmarshal([]byte(getTextContent(result)), &out); unmarshalErr != nil {
+			t.Fatalf("failed to unmarshal: %v\n%s", unmarshalErr, getTextContent(result))
+		}
+		if out.TotalCount != 1 || len(out.Disclosures) != 1 || out.Disclosures[0].ID != 900 {
+			t.Fatalf("out = %+v", out)
+		}
+		if out.Disclosures[0].Holder != "Acme Corp" || out.Disclosures[0].Licensing != "reasonable" {
+			t.Errorf("Disclosures[0] = %+v", out.Disclosures[0])
+		}
+	})
+
+	t.Run("by draft name", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetIPRInput{Name: "draft-ipr-example"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var out drafts.IPRResult
+		if unmarshalErr := json.Unmarshal([]byte(getTextContent(result)), &out); unmarshalErr != nil {
+			t.Fatalf("failed to unmarshal: %v\n%s", unmarshalErr, getTextContent(result))
+		}
+		if out.TotalCount != 1 || out.Disclosures[0].ID != 901 {
+			t.Fatalf("out = %+v", out)
+		}
+	})
+
+	t.Run("draft name with embedded revision is stripped before lookup", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetIPRInput{Name: "draft-ipr-example-03"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("unexpected error result: %s", getTextContent(result))
+		}
+		var out drafts.IPRResult
+		if unmarshalErr := json.Unmarshal([]byte(getTextContent(result)), &out); unmarshalErr != nil {
+			t.Fatalf("failed to unmarshal: %v\n%s", unmarshalErr, getTextContent(result))
+		}
+		if len(out.SearchedDocs) != 1 || out.SearchedDocs[0] != "draft-ipr-example" {
+			t.Errorf("SearchedDocs = %v, want the revision suffix stripped", out.SearchedDocs)
+		}
+	})
+
+	t.Run("empty result for a document with no disclosures", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetIPRInput{RFC: 7000})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("unexpected error result: %s", getTextContent(result))
+		}
+		var out drafts.IPRResult
+		if unmarshalErr := json.Unmarshal([]byte(getTextContent(result)), &out); unmarshalErr != nil {
+			t.Fatalf("failed to unmarshal: %v\n%s", unmarshalErr, getTextContent(result))
+		}
+		if out.TotalCount != 0 || len(out.Disclosures) != 0 {
+			t.Errorf("out = %+v, want zero disclosures, not an error", out)
+		}
+	})
+
+	t.Run("unknown rfc", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetIPRInput{RFC: 404})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError {
+			t.Fatal("expected error result for an unknown RFC number")
+		}
+		if !strings.Contains(getTextContent(result), "rfc404") {
+			t.Errorf("expected error to name the attempted document, got: %s", getTextContent(result))
+		}
+	})
+
+	t.Run("both rfc and name given", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetIPRInput{RFC: 9000, Name: "draft-ipr-example"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError {
+			t.Error("expected error result when both rfc and name are given")
+		}
+	})
+
+	t.Run("neither rfc nor name given", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetIPRInput{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError {
+			t.Error("expected error result when neither rfc nor name is given")
+		}
+	})
+}
+
 func TestHandleGetDraftSection_CacheHit(t *testing.T) {
 	var metaRequests, textRequests atomic.Int32
 	ts := newDraftTestServer(t, &metaRequests, &textRequests)

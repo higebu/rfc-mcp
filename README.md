@@ -306,11 +306,12 @@ offline/no-egress deployments.
 | `get_draft_metadata` | Title, abstract, page count, submission/expiry dates, and (if published) the resulting RFC number | `name` (required) |
 | `get_draft_toc` | Table of contents of a draft | `name` (required), `revision` |
 | `get_draft_section` | Section content, addressed and paginated the same way as `get_section` | `name` (required), `revision`, `section_number` (required), `include_subsections`, `offset`, `max_lines`, `max_chars` |
+| `get_ipr` | IETF IPR (patent) disclosures against an RFC or draft | `rfc` or `name` (exactly one required) |
 
 `name` accepts both a bare draft name (`draft-ietf-quic-transport`) and one
-with an explicit revision suffix (`draft-ietf-quic-transport-34`); all four
-tools resolve to the latest revision unless one is given explicitly (via
-`revision`, or embedded directly in `name`).
+with an explicit revision suffix (`draft-ietf-quic-transport-34`); the first
+four tools resolve to the latest revision unless one is given explicitly
+(via `revision`, or embedded directly in `name`).
 
 `search_drafts(query: "quic", group: "quic")` returns:
 
@@ -358,10 +359,58 @@ submission metadata is never edited after the fact. `get_draft_toc` and
 shape as `get_toc`/`get_section` (see above), just addressed by draft
 `name`/`revision` instead of an RFC number.
 
+`get_ipr(rfc: 3261)` returns:
+
+```json
+{
+  "searched_docs": ["rfc3261", "draft-ietf-sip-rfc2543bis"],
+  "disclosures": [
+    {
+      "id": 62,
+      "url": "https://datatracker.ietf.org/ipr/62/",
+      "title": "AT&T's Patent Statement pertaining to draft-ietf-sip-rfc2543bis",
+      "state": "posted",
+      "holder": "AT&T",
+      "licensing": "reasonable",
+      "has_patent_pending": true,
+      "patent_info": "...",
+      "time": "2002-01-08T00:00:00Z",
+      "docs": ["draft-ietf-sip-rfc2543bis"]
+    },
+    {
+      "id": 579,
+      "url": "https://datatracker.ietf.org/ipr/579/",
+      "title": "AT&T's statement about IPR claimed in RFC 3261",
+      "state": "posted",
+      "holder": "AT&T",
+      "licensing": "see-below",
+      "has_patent_pending": true,
+      "patent_info": "...",
+      "time": "2005-05-23T07:00:00Z",
+      "docs": ["rfc3261"]
+    }
+  ],
+  "total_count": 2
+}
+```
+
+An RFC's disclosures aren't automatically carried over from its originating
+draft, and some are filed directly against the RFC name instead — so
+`get_ipr` searches the RFC name, its originating Internet-Draft (resolved
+via the Datatracker's `became_rfc` relationship), and any draft(s) that
+draft itself replaced (one hop); `get_ipr(name: "draft-...")` follows the
+same one-hop `replaces` fan-out without the RFC step. `searched_docs`
+reports exactly which document names were queried. Only `Posted`
+disclosures are returned; `pending`/`parked`/`rejected`/`removed`
+disclosures are excluded. `licensing` and `has_patent_pending`/
+`patent_info` are absent for a "generic" disclosure (one with a free-form
+`statement` instead of structured patent info).
+
 Draft plain-text bodies are cached on disk forever per revision (a specific
 revision never changes once submitted); Datatracker metadata (latest
-revision, title, abstract, expiry) is cached for 1 hour — shorter than the
-RFC tools' 24-hour `rfc-index.xml` cache, since drafts move faster.
+revision, title, abstract, expiry) and IPR disclosures are cached for 1
+hour — shorter than the RFC tools' 24-hour `rfc-index.xml` cache, since
+drafts (and their IPR filings) move faster.
 
 ## Command Reference
 
@@ -378,10 +427,10 @@ Start the MCP server.
 
 Set `RFC_MCP_DISABLE_DRAFTS=1` to skip registering the
 [Internet-Draft tools](#internet-drafts) (`search_drafts`,
-`get_draft_metadata`, `get_draft_toc`, `get_draft_section`) — useful for
-offline or no-egress deployments, since unlike the RFC tools they perform
-live network requests to the IETF Datatracker/archive on every call. No
-corresponding flag; env var only.
+`get_draft_metadata`, `get_draft_toc`, `get_draft_section`, `get_ipr`) —
+useful for offline or no-egress deployments, since unlike the RFC tools
+they perform live network requests to the IETF Datatracker/archive on every
+call. No corresponding flag; env var only.
 
 ### `build`
 
@@ -479,12 +528,13 @@ about 8 minutes and produces an ~865 MB SQLite database: 9,982 RFC rows
 cross-references, and 7,961 errata records.
 
 Internet-Drafts (see [Internet-Drafts](#internet-drafts) above) are never
-part of this database — the `search_drafts`/`get_draft_*` tools fetch from
-the [IETF Datatracker](https://datatracker.ietf.org/) and
+part of this database — the `search_drafts`/`get_draft_*`/`get_ipr` tools
+fetch from the [IETF Datatracker](https://datatracker.ietf.org/) and
 [archive](https://www.ietf.org/archive/id/) on demand instead, with their
-own cache: draft bodies forever per revision, Datatracker metadata for 1
-hour. Both live under the same `$XDG_CACHE_HOME/rfc-mcp` root as
-`rfc-index.xml`/`errata.json`/`--raw-dir`, under a `drafts/` subdirectory.
+own cache: draft bodies forever per revision, Datatracker metadata and IPR
+disclosures for 1 hour. All three live under the same
+`$XDG_CACHE_HOME/rfc-mcp` root as `rfc-index.xml`/`errata.json`/
+`--raw-dir`, under a `drafts/` subdirectory.
 
 ## Limitations
 

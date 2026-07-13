@@ -297,7 +297,7 @@ func cmdImportDir(args []string) {
 }
 
 // draftsEnabled reports whether the Internet-Draft tools (search_drafts,
-// get_draft_metadata, get_draft_toc, get_draft_section) should be
+// get_draft_metadata, get_draft_toc, get_draft_section, get_ipr) should be
 // registered. Set RFC_MCP_DISABLE_DRAFTS=1 to skip them entirely for
 // offline/no-egress deployments -- unlike the RFC tools (SQLite only),
 // draft tools perform live network requests to the IETF Datatracker/
@@ -325,7 +325,7 @@ func buildInstructions(d *db.DB, drafts bool) string {
 	}
 
 	if drafts {
-		instructions += " For pre-publication Internet-Drafts, use search_drafts, get_draft_metadata, get_draft_toc, and get_draft_section -- unlike the RFC tools (SQLite only, fully offline), these fetch from the IETF Datatracker/archive over the network on every call and are unavailable when RFC_MCP_DISABLE_DRAFTS=1."
+		instructions += " For pre-publication Internet-Drafts, use search_drafts, get_draft_metadata, get_draft_toc, and get_draft_section -- unlike the RFC tools (SQLite only, fully offline), these fetch from the IETF Datatracker/archive over the network on every call and are unavailable when RFC_MCP_DISABLE_DRAFTS=1. Use get_ipr for patent disclosures against an RFC or draft."
 	}
 
 	return instructions
@@ -431,6 +431,7 @@ func cmdServe(args []string) {
 		mcp.AddTool(s, tools.GetDraftMetadataTool, tools.HandleGetDraftMetadata(draftClient))
 		mcp.AddTool(s, tools.GetDraftTOCTool, tools.HandleGetDraftTOC(draftClient))
 		mcp.AddTool(s, tools.GetDraftSectionTool, tools.HandleGetDraftSection(draftClient))
+		mcp.AddTool(s, tools.GetIPRTool, tools.HandleGetIPR(draftClient))
 	}
 
 	switch *transport {
