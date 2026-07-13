@@ -22,9 +22,13 @@ type SearchDraftsInput struct {
 var SearchDraftsTool = &mcp.Tool{
 	Name: "search_drafts",
 	Description: "Search Internet-Drafts by title/name substring and/or working group, fetched on demand from " +
-		"the IETF Datatracker. Only Active drafts are returned by default; set include_expired to widen the " +
-		"search to every lifecycle state. Results are paginated (default 20 per page); use limit and offset " +
-		"to navigate. Use get_draft_metadata/get_draft_toc/get_draft_section to read a specific draft found here.",
+		"the IETF Datatracker. A multi-word query requires every word to appear in the title, in any order " +
+		"(e.g. 'BGP MUP SAFI' matches a title containing all three words even without that exact phrase); " +
+		"use fewer, rarer/more distinctive words for a broader match. Only Active drafts are returned by " +
+		"default; set include_expired to widen the search to every lifecycle state. Results are paginated " +
+		"(default 20 per page); use limit and offset to navigate; a multi-word search's response may include " +
+		"\"truncated\": true if its internal scan hit a cap, meaning total_count is a floor, not exact. Use " +
+		"get_draft_metadata/get_draft_toc/get_draft_section to read a specific draft found here.",
 }
 
 func HandleSearchDrafts(client *http.Client) func(ctx context.Context, req *mcp.CallToolRequest, input SearchDraftsInput) (*mcp.CallToolResult, any, error) {

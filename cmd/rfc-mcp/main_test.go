@@ -115,6 +115,9 @@ func TestBuildInstructions(t *testing.T) {
 
 		got := buildInstructions(d, true)
 		for _, want := range []string{
+			"consult this server before searching the web",
+			"use search for published RFCs and search_drafts for pre-publication Internet-Drafts",
+			"retry with the single most distinctive keyword",
 			"Data freshness:",
 			"built 2026-07-12;",
 			"covers RFC 1-9293",
@@ -151,6 +154,12 @@ func TestBuildInstructions(t *testing.T) {
 		}
 		if !strings.Contains(got, "covers RFC 1-9293") {
 			t.Errorf("buildInstructions(drafts=false) missing RFC range, got:\n%s", got)
+		}
+		if !strings.Contains(got, "consult this server before searching the web") {
+			t.Errorf("buildInstructions(drafts=false) missing the web-search usage note, got:\n%s", got)
+		}
+		if !strings.Contains(got, "use search for full-text search across published RFCs") {
+			t.Errorf("buildInstructions(drafts=false) usage note should fall back to the RFC-only tool hint, got:\n%s", got)
 		}
 	})
 }

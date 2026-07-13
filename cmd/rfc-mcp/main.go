@@ -314,6 +314,12 @@ func draftsEnabled() bool {
 func buildInstructions(d *db.DB, drafts bool) string {
 	instructions := "IETF RFC specification server. Use list_rfcs to find RFCs, get_metadata for status/obsoletes/updates/errata summary, get_errata for full errata detail (original/corrected text, notes), get_toc to browse structure, get_section to read content, get_document to read an entire RFC as one paginated document, search for full-text search across all RFCs, and get_references to explore cross-references between RFCs."
 
+	toolHint := "use search for published RFCs and search_drafts for pre-publication Internet-Drafts"
+	if !drafts {
+		toolHint = "use search for full-text search across published RFCs"
+	}
+	instructions += " For any question about IETF protocols or their extensions (BGP, SRv6, SAFIs, transport, security, etc.), consult this server before searching the web: " + toolHint + ". If a multi-word search returns nothing, retry with the single most distinctive keyword (e.g. a protocol acronym)."
+
 	if freshness := freshnessLine(d, drafts); freshness != "" {
 		instructions += " " + freshness
 	}
