@@ -123,9 +123,12 @@ Thirteen tools are exposed via MCP:
 
 ### Transport
 
-- **stdio** (default): For Claude Code / IDE integration
-- **HTTP**: With optional Bearer token auth (`RFC_MCP_BEARER_TOKEN`); `PORT`
-  (Cloud Run / Heroku convention) forces HTTP transport when set
+- **stdio** (default): For Claude Code / IDE integration; protocol version
+  negotiated automatically by the SDK
+- **HTTP**: Stateless streamable HTTP serving MCP protocol 2026-07-28
+  (older clients negotiate down automatically); optional Bearer token auth
+  (`RFC_MCP_BEARER_TOKEN`); `PORT` (Cloud Run / Heroku convention) forces
+  HTTP transport when set
 
 ## Coding Standards
 
