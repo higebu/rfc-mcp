@@ -119,6 +119,11 @@ Add to your configuration file (`~/Library/Application Support/Claude/claude_des
 
 #### Streamable HTTP (remote deployment)
 
+The HTTP transport runs stateless streamable HTTP, serving MCP protocol
+2026-07-28 (older clients negotiate down automatically). No session
+affinity is needed, so it is safe behind load balancers and on
+scale-to-zero platforms like Cloud Run.
+
 Start the server with HTTP transport:
 
 ```bash
