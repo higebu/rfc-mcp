@@ -373,6 +373,37 @@ func freshnessLine(d *db.DB, drafts bool) string {
 	return line
 }
 
+// newServer builds the MCP server with all tools registered. drafts controls
+// whether the network-backed Internet-Draft tools are included (see
+// draftsEnabled).
+func newServer(d *db.DB, drafts bool) *mcp.Server {
+	s := mcp.NewServer(&mcp.Implementation{
+		Name:    "rfc-mcp",
+		Version: version,
+	}, &mcp.ServerOptions{
+		Instructions: buildInstructions(d, drafts),
+	})
+
+	mcp.AddTool(s, tools.ListRFCsTool, tools.HandleListRFCs(d))
+	mcp.AddTool(s, tools.GetMetadataTool, tools.HandleGetMetadata(d))
+	mcp.AddTool(s, tools.GetErrataTool, tools.HandleGetErrata(d))
+	mcp.AddTool(s, tools.GetTOCTool, tools.HandleGetTOC(d))
+	mcp.AddTool(s, tools.GetSectionTool, tools.HandleGetSection(d))
+	mcp.AddTool(s, tools.GetDocumentTool, tools.HandleGetDocument(d))
+	mcp.AddTool(s, tools.SearchTool, tools.HandleSearch(d))
+	mcp.AddTool(s, tools.GetReferencesTool, tools.HandleGetReferences(d))
+
+	if drafts {
+		draftClient := &http.Client{Timeout: 30 * time.Second}
+		mcp.AddTool(s, tools.SearchDraftsTool, tools.HandleSearchDrafts(draftClient))
+		mcp.AddTool(s, tools.GetDraftMetadataTool, tools.HandleGetDraftMetadata(draftClient))
+		mcp.AddTool(s, tools.GetDraftTOCTool, tools.HandleGetDraftTOC(draftClient))
+		mcp.AddTool(s, tools.GetDraftSectionTool, tools.HandleGetDraftSection(draftClient))
+		mcp.AddTool(s, tools.GetIPRTool, tools.HandleGetIPR(draftClient))
+	}
+	return s
+}
+
 func cmdServe(args []string) {
 	defaultTransport := "stdio"
 	if v := os.Getenv("RFC_MCP_TRANSPORT"); v != "" {
@@ -408,31 +439,7 @@ func cmdServe(args []string) {
 	}
 	defer d.Close()
 
-	drafts := draftsEnabled()
-	s := mcp.NewServer(&mcp.Implementation{
-		Name:    "rfc-mcp",
-		Version: version,
-	}, &mcp.ServerOptions{
-		Instructions: buildInstructions(d, drafts),
-	})
-
-	mcp.AddTool(s, tools.ListRFCsTool, tools.HandleListRFCs(d))
-	mcp.AddTool(s, tools.GetMetadataTool, tools.HandleGetMetadata(d))
-	mcp.AddTool(s, tools.GetErrataTool, tools.HandleGetErrata(d))
-	mcp.AddTool(s, tools.GetTOCTool, tools.HandleGetTOC(d))
-	mcp.AddTool(s, tools.GetSectionTool, tools.HandleGetSection(d))
-	mcp.AddTool(s, tools.GetDocumentTool, tools.HandleGetDocument(d))
-	mcp.AddTool(s, tools.SearchTool, tools.HandleSearch(d))
-	mcp.AddTool(s, tools.GetReferencesTool, tools.HandleGetReferences(d))
-
-	if drafts {
-		draftClient := &http.Client{Timeout: 30 * time.Second}
-		mcp.AddTool(s, tools.SearchDraftsTool, tools.HandleSearchDrafts(draftClient))
-		mcp.AddTool(s, tools.GetDraftMetadataTool, tools.HandleGetDraftMetadata(draftClient))
-		mcp.AddTool(s, tools.GetDraftTOCTool, tools.HandleGetDraftTOC(draftClient))
-		mcp.AddTool(s, tools.GetDraftSectionTool, tools.HandleGetDraftSection(draftClient))
-		mcp.AddTool(s, tools.GetIPRTool, tools.HandleGetIPR(draftClient))
-	}
+	s := newServer(d, draftsEnabled())
 
 	switch *transport {
 	case "stdio":
@@ -441,9 +448,12 @@ func cmdServe(args []string) {
 			log.Fatalf("Server error: %v", err)
 		}
 	case "http":
+		// Stateless mode is required to serve MCP protocol 2026-07-28; the
+		// server keeps no per-session state, so nothing is lost and no
+		// session affinity is needed behind load balancers.
 		mcpHandler := mcp.NewStreamableHTTPHandler(
 			func(r *http.Request) *mcp.Server { return s },
-			nil,
+			&mcp.StreamableHTTPOptions{Stateless: true},
 		)
 		var mcpH http.Handler = mcpHandler
 		if *bearerToken != "" {
