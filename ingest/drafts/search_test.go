@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // withTestRoots redirects DatatrackerRoot/ArchiveRoot to url for the
@@ -242,6 +244,72 @@ func TestSearchDrafts_MultiWordOffsetLimit(t *testing.T) {
 	}
 	if result.Truncated {
 		t.Errorf("Truncated = true, want false")
+	}
+}
+
+// TestSearchDrafts_ParallelBecameRFCLookups: per-result became_rfc
+// lookups used to run one synchronous GET per result (N+1). They must now
+// overlap (more than one in flight at once), stay bounded by
+// becameRFCConcurrency, and preserve result order.
+func TestSearchDrafts_ParallelBecameRFCLookups(t *testing.T) {
+	const numDrafts = 8
+
+	var mu sync.Mutex
+	inFlight, maxInFlight := 0, 0
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/doc/document/", func(w http.ResponseWriter, r *http.Request) {
+		var objects []string
+		for i := range numDrafts {
+			objects = append(objects, fmt.Sprintf(
+				`{"name": "draft-pub-%d", "rev": "01", "title": "Published draft %d", "expires": "", "pages": 1, "rfc": null, "states": ["/api/v1/doc/state/3/"]}`, i, i))
+		}
+		_, _ = fmt.Fprintf(w, `{"meta": {"total_count": %d}, "objects": [%s]}`, numDrafts, strings.Join(objects, ","))
+	})
+	mux.HandleFunc("/api/v1/doc/relateddocument/", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		inFlight++
+		if inFlight > maxInFlight {
+			maxInFlight = inFlight
+		}
+		mu.Unlock()
+		time.Sleep(30 * time.Millisecond) // widen the overlap window
+
+		// draft-pub-N became rfc900N.
+		name := r.URL.Query().Get("source__name")
+		n := strings.TrimPrefix(name, "draft-pub-")
+		_, _ = fmt.Fprintf(w, `{"meta": {"total_count": 1}, "objects": [{"originaltargetaliasname": "rfc900%s"}]}`, n)
+
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	withTestRoots(t, ts.URL)
+
+	result, err := SearchDrafts(context.Background(), ts.Client(), SearchParams{Query: "published"})
+	if err != nil {
+		t.Fatalf("SearchDrafts: %v", err)
+	}
+	if len(result.Drafts) != numDrafts {
+		t.Fatalf("len(Drafts) = %d, want %d", len(result.Drafts), numDrafts)
+	}
+	for i, d := range result.Drafts {
+		wantName := fmt.Sprintf("draft-pub-%d", i)
+		wantRFC := 9000 + i
+		if d.Name != wantName || d.RFC != wantRFC {
+			t.Errorf("Drafts[%d] = {Name: %q, RFC: %d}, want {%q, %d} (order must be preserved)", i, d.Name, d.RFC, wantName, wantRFC)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if maxInFlight < 2 {
+		t.Errorf("max concurrent became_rfc lookups = %d, want >= 2 (lookups must overlap, not run sequentially)", maxInFlight)
+	}
+	if maxInFlight > becameRFCConcurrency {
+		t.Errorf("max concurrent became_rfc lookups = %d, want <= %d (bounded pool)", maxInFlight, becameRFCConcurrency)
 	}
 }
 

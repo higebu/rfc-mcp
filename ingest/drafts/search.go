@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // SearchParams holds filters for SearchDrafts.
@@ -110,19 +111,48 @@ func SearchDrafts(ctx context.Context, client *http.Client, params SearchParams)
 	}
 
 	result := SearchResult{TotalCount: raw.Meta.TotalCount, Limit: limit, Offset: params.Offset}
-	for _, o := range raw.Objects {
-		item := SearchResultItem{Name: o.Name, Rev: o.Rev, Title: o.Title, Expires: o.Expires, Pages: o.Pages}
-		// Best-effort: a became_rfc lookup failure (network hiccup, an
-		// unexpected alias shape) just leaves RFC unset rather than
-		// failing the whole search.
-		if hasState(o.States, draftRFCStateID) {
-			if n, err := becameRFC(ctx, client, o.Name); err == nil {
-				item.RFC = n
-			}
-		}
-		result.Drafts = append(result.Drafts, item)
-	}
+	result.Drafts = resolveResultItems(ctx, client, raw.Objects)
 	return result, nil
+}
+
+// becameRFCConcurrency bounds how many became_rfc lookups
+// resolveResultItems runs against the Datatracker at once for one search's
+// result page.
+const becameRFCConcurrency = 4
+
+// resolveResultItems converts one page of raw search documents into result
+// items, resolving the published-RFC number for every document whose
+// lifecycle state carries draftRFCStateID. The lookups previously ran one
+// synchronous GET per result (an N+1 pattern that made result pages full
+// of published drafts slow); they now run concurrently, bounded by
+// becameRFCConcurrency, with each goroutine writing only its own index so
+// result order is preserved. Lookups stay best-effort, as before: a
+// became_rfc failure (network hiccup, an unexpected alias shape) just
+// leaves that item's RFC unset rather than failing the whole search.
+func resolveResultItems(ctx context.Context, client *http.Client, docs []rawDocument) []SearchResultItem {
+	if len(docs) == 0 {
+		return nil
+	}
+	items := make([]SearchResultItem, len(docs))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, becameRFCConcurrency)
+	for i, o := range docs {
+		items[i] = SearchResultItem{Name: o.Name, Rev: o.Rev, Title: o.Title, Expires: o.Expires, Pages: o.Pages}
+		if !hasState(o.States, draftRFCStateID) {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if n, err := becameRFC(ctx, client, o.Name); err == nil {
+				items[i].RFC = n
+			}
+		}()
+	}
+	wg.Wait()
+	return items
 }
 
 // multiWordPageSize is the page size used when walking Datatracker
@@ -236,16 +266,6 @@ func searchDraftsMultiWord(ctx context.Context, client *http.Client, params Sear
 
 	start := min(params.Offset, len(matches))
 	end := min(start+limit, len(matches))
-	for _, o := range matches[start:end] {
-		item := SearchResultItem{Name: o.Name, Rev: o.Rev, Title: o.Title, Expires: o.Expires, Pages: o.Pages}
-		// Best-effort, same as SearchDrafts: a became_rfc lookup failure
-		// just leaves RFC unset rather than failing the whole search.
-		if hasState(o.States, draftRFCStateID) {
-			if n, err := becameRFC(ctx, client, o.Name); err == nil {
-				item.RFC = n
-			}
-		}
-		result.Drafts = append(result.Drafts, item)
-	}
+	result.Drafts = resolveResultItems(ctx, client, matches[start:end])
 	return result, nil
 }
