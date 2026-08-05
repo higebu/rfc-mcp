@@ -33,13 +33,15 @@ const defaultDBPath = "data/rfc.db"
 
 // newHTTPServer wraps handler in an http.Server with explicit limits so a
 // client cannot hold a connection open indefinitely while trickling request
-// headers (slowloris). ReadTimeout/WriteTimeout are deliberately left unset:
-// MCP streamable HTTP responses can be long-lived streams, and those timeouts
-// would cut them off.
+// headers or body (slowloris). ReadTimeout bounds reading the request only
+// (headers + body), never the response, so it is safe to set. WriteTimeout is
+// deliberately left unset: MCP streamable HTTP responses can be long-lived
+// streams, and a write deadline would cut them off.
 func newHTTPServer(addr string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              addr,
 		Handler:           handler,
+		ReadTimeout:       60 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20, // 1 MiB

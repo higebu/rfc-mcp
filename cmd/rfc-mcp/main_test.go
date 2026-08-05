@@ -45,9 +45,9 @@ func TestDraftsEnabled(t *testing.T) {
 }
 
 // TestNewHTTPServer asserts the serve HTTP transport uses an http.Server
-// with slowloris protections (header read deadline, idle timeout, bounded
-// header size) while leaving ReadTimeout/WriteTimeout unset so long-lived
-// MCP streaming responses are never cut off.
+// with slowloris protections (request read deadline, header read deadline,
+// idle timeout, bounded header size) while leaving WriteTimeout unset so
+// long-lived MCP streaming responses are never cut off.
 func TestNewHTTPServer(t *testing.T) {
 	mux := http.NewServeMux()
 	srv := newHTTPServer(":9999", mux)
@@ -67,8 +67,8 @@ func TestNewHTTPServer(t *testing.T) {
 	if srv.MaxHeaderBytes <= 0 {
 		t.Errorf("MaxHeaderBytes = %d, want > 0", srv.MaxHeaderBytes)
 	}
-	if srv.ReadTimeout != 0 {
-		t.Errorf("ReadTimeout = %v, want 0 (would cut off long-lived MCP streams)", srv.ReadTimeout)
+	if srv.ReadTimeout <= 0 {
+		t.Errorf("ReadTimeout = %v, want > 0 (slowloris protection via request body)", srv.ReadTimeout)
 	}
 	if srv.WriteTimeout != 0 {
 		t.Errorf("WriteTimeout = %v, want 0 (would cut off long-lived MCP streams)", srv.WriteTimeout)
