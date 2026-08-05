@@ -294,7 +294,7 @@ func rescueDanglingParents(lines []string, headings []rawHeading, tocStart, tocE
 			// starts with an uppercase letter or a digit ("Dynamic
 			// Conformance", "Broadcast Subnetwork IIH PDUs"), never with
 			// punctuation or a lowercase sentence continuation.
-			if c := title[0]; !(c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			if c := title[0]; (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
 				continue
 			}
 			exists[number] = true
