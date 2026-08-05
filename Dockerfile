@@ -33,10 +33,11 @@ RUN mkdir -p /var/cache/rfc-mcp
 # 3) Final image: just the binary, the baked-in database, and CA certs.
 FROM scratch
 # scratch sets neither HOME nor XDG_CACHE_HOME, so cache-directory resolution
-# fails and the on-demand Internet-Draft cache is silently disabled. Point it
-# at a directory that exists in the image (the process runs as root, so it is
-# writable).
-ENV XDG_CACHE_HOME=/var/cache/rfc-mcp
+# fails and the on-demand Internet-Draft cache is silently disabled. The app
+# appends "rfc-mcp" to XDG_CACHE_HOME (pipeline.CacheDir), so /var/cache here
+# resolves to /var/cache/rfc-mcp -- the empty directory baked below (the
+# process runs as root, so it is writable).
+ENV XDG_CACHE_HOME=/var/cache
 COPY --from=db-builder /var/cache/rfc-mcp /var/cache/rfc-mcp
 COPY --from=db-builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=go-builder /rfc-mcp /rfc-mcp
