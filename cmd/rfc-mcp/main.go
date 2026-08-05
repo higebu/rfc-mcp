@@ -26,6 +26,10 @@ var version = "dev"
 const usage = `Usage: rfc-mcp <command> [options]
 Commands: serve, build, download, import, import-dir, update, completion`
 
+// defaultDBPath is the default SQLite database path shared by every
+// subcommand that takes a -db flag (serve, build, update, import, import-dir).
+const defaultDBPath = "data/rfc.db"
+
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -90,7 +94,7 @@ func defaultRawDir() string {
 
 func cmdBuild(args []string) {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
-	dbPath := fs.String("db", "data/rfc.db", "Output SQLite database path")
+	dbPath := fs.String("db", defaultDBPath, "Output SQLite database path")
 	workers := fs.Int("workers", pipeline.DefaultConcurrency(), "Number of parallel workers")
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP timeout")
 	from := fs.Int("from", 0, "Only process RFCs numbered >= this (0 = no lower bound)")
@@ -144,7 +148,7 @@ func removeWorkingCopy(path string) {
 // "refresh" means (live-fetched metadata/errata, new RFC bodies only).
 func cmdUpdate(args []string) {
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
-	dbPath := fs.String("db", "data/rfc.db", "SQLite database path")
+	dbPath := fs.String("db", defaultDBPath, "SQLite database path")
 	workers := fs.Int("workers", pipeline.DefaultConcurrency(), "Number of parallel workers")
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP timeout")
 	rawDir := fs.String("raw-dir", defaultRawDir(), "Directory to cache downloaded RFC .txt files")
@@ -237,7 +241,7 @@ func cmdDownload(args []string) {
 
 func cmdImport(args []string) {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
-	dbPath := fs.String("db", "data/rfc.db", "Output SQLite database path")
+	dbPath := fs.String("db", defaultDBPath, "Output SQLite database path")
 	_ = fs.Parse(args)
 
 	if fs.NArg() < 1 {
@@ -268,7 +272,7 @@ func cmdImport(args []string) {
 
 func cmdImportDir(args []string) {
 	fs := flag.NewFlagSet("import-dir", flag.ExitOnError)
-	dbPath := fs.String("db", "data/rfc.db", "Output SQLite database path")
+	dbPath := fs.String("db", defaultDBPath, "Output SQLite database path")
 	workers := fs.Int("workers", pipeline.DefaultConcurrency(), "Number of parallel parse workers")
 	_ = fs.Parse(args)
 
@@ -421,7 +425,7 @@ func cmdServe(args []string) {
 	}
 
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	dbPath := fs.String("db", "rfc.db", "Path to SQLite database")
+	dbPath := fs.String("db", defaultDBPath, "Path to SQLite database")
 	transport := fs.String("transport", defaultTransport, "Transport type: stdio or http (env: RFC_MCP_TRANSPORT, or PORT to force http)")
 	fs.StringVar(transport, "t", defaultTransport, "Shorthand for -transport")
 	addr := fs.String("addr", defaultAddr, "HTTP listen address (env: RFC_MCP_ADDR, or PORT)")

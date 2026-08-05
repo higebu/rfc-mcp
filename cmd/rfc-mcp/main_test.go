@@ -280,6 +280,23 @@ func TestCmdCompletion_NoArgs(t *testing.T) {
 	}
 }
 
+// TestCmdServe_DBDefault asserts serve's -db default is the shared
+// defaultDBPath ("data/rfc.db") used by every other subcommand, not the
+// old divergent "rfc.db". flag.ExitOnError makes -h exit the process, so
+// the usage text is captured from a helper subprocess.
+func TestCmdServe_DBDefault(t *testing.T) {
+	if os.Getenv("CMD_SERVE_HELP_HELPER") == "1" {
+		cmdServe([]string{"-h"})
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestCmdServe_DBDefault")
+	cmd.Env = append(os.Environ(), "CMD_SERVE_HELP_HELPER=1")
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), `default "data/rfc.db"`) {
+		t.Errorf("serve -h usage should show -db default %q, got:\n%s", "data/rfc.db", out)
+	}
+}
+
 func TestMainDispatch_UnknownCommand(t *testing.T) {
 	if os.Getenv("MAIN_UNKNOWN_HELPER") == "1" {
 		os.Args = []string{"rfc-mcp", "bogus-command"}

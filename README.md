@@ -425,7 +425,7 @@ Start the MCP server.
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--db` | Path to SQLite database | `rfc.db` |
+| `--db` | Path to SQLite database | `data/rfc.db` |
 | `--transport` (`-t`) | Transport type: `stdio` or `http` (env: `RFC_MCP_TRANSPORT`; defaults to `http` when `PORT` is set) | `stdio` |
 | `--addr` | HTTP listen address (env: `RFC_MCP_ADDR`, or `PORT` interpreted as `:$PORT`) | `:8080` |
 | `--bearer-token` | Bearer token for HTTP auth (env: `RFC_MCP_BEARER_TOKEN`) | |
