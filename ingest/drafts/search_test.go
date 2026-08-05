@@ -245,6 +245,59 @@ func TestSearchDrafts_MultiWordOffsetLimit(t *testing.T) {
 	}
 }
 
+// TestSearchDrafts_NegativeOffsetMultiWord is a regression test for a
+// panic: a negative Offset used to flow into the multi-word path's
+// matches[start:end] slice (start := min(Offset, len(matches)) went
+// negative). It must instead be clamped to 0.
+func TestSearchDrafts_NegativeOffsetMultiWord(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/doc/document/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"meta": {"total_count": 1}, "objects": [
+			{"name": "draft-foo-bar-0", "rev": "01", "title": "Foo Bar item", "expires": "", "pages": 1, "rfc": null, "states": []}
+		]}`))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	withTestRoots(t, ts.URL)
+
+	result, err := SearchDrafts(context.Background(), ts.Client(), SearchParams{Query: "foo bar", Offset: -1})
+	if err != nil {
+		t.Fatalf("SearchDrafts: %v", err)
+	}
+	if result.Offset != 0 {
+		t.Errorf("Offset = %d, want clamped to 0", result.Offset)
+	}
+	if len(result.Drafts) != 1 || result.Drafts[0].Name != "draft-foo-bar-0" {
+		t.Errorf("Drafts = %+v, want the single match starting at index 0", result.Drafts)
+	}
+}
+
+// TestSearchDrafts_NegativeOffsetSingleWord: the single-word path embeds
+// Offset directly in the query string; a negative value must be clamped
+// to 0 there too rather than sent to the Datatracker.
+func TestSearchDrafts_NegativeOffsetSingleWord(t *testing.T) {
+	var gotOffset string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/doc/document/", func(w http.ResponseWriter, r *http.Request) {
+		gotOffset = r.URL.Query().Get("offset")
+		_, _ = w.Write([]byte(`{"meta": {"total_count": 0}, "objects": []}`))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	withTestRoots(t, ts.URL)
+
+	result, err := SearchDrafts(context.Background(), ts.Client(), SearchParams{Query: "quic", Offset: -5})
+	if err != nil {
+		t.Fatalf("SearchDrafts: %v", err)
+	}
+	if gotOffset != "0" {
+		t.Errorf("offset query param = %q, want \"0\"", gotOffset)
+	}
+	if result.Offset != 0 {
+		t.Errorf("Offset = %d, want clamped to 0", result.Offset)
+	}
+}
+
 // TestSearchDrafts_MultiWordTruncated covers (d): when the server-side
 // result set exceeds multiWordScanCap, searchDraftsMultiWord must stop
 // scanning at the cap (bounding worst-case requests to

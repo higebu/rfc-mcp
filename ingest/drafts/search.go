@@ -67,6 +67,13 @@ func SearchDrafts(ctx context.Context, client *http.Client, params SearchParams)
 	if limit <= 0 {
 		limit = 20
 	}
+	// Defensive clamp, independent of the tool-boundary one: a negative
+	// Offset would panic the multi-word path's matches[start:end] slice
+	// below and produce a nonsensical offset query param on the
+	// single-word path.
+	if params.Offset < 0 {
+		params.Offset = 0
+	}
 
 	if tokens := strings.Fields(params.Query); len(tokens) > 1 {
 		return searchDraftsMultiWord(ctx, client, params, tokens, limit)
