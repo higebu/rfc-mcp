@@ -131,11 +131,18 @@ steps:
             --region=${_REGION} --member=allUsers --role=roles/run.invoker
         else
           # Actively revoke the binding so a service made public by an
-          # earlier _PUBLIC="true" deploy does not stay public. The removal
-          # is a no-op error on a fresh service (binding not found), so
-          # tolerate failure.
+          # earlier _PUBLIC="true" deploy does not stay public. Only a
+          # binding-not-found error (fresh service) is tolerated; any other
+          # failure (permissions, API error) fails the build so a private
+          # deploy can never silently stay public.
           echo "Removing allUsers invoker binding (_PUBLIC=${_PUBLIC})"
-          gcloud run services remove-iam-policy-binding ${_SERVICE} \
+          if ! out=$$(gcloud run services remove-iam-policy-binding ${_SERVICE} \
             --region=${_REGION} --member=allUsers --role=roles/run.invoker \
-            --quiet || true
+            --quiet 2>&1); then
+            echo "$$out"
+            case "$$out" in
+              *"not found"*|*"NOT_FOUND"*) echo "Binding already absent; continuing." ;;
+              *) echo "Failed to revoke public invoker binding" >&2; exit 1 ;;
+            esac
+          fi
         fi
