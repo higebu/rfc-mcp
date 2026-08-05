@@ -19,8 +19,9 @@
 # fast smoke-test image.
 #
 # _PUBLIC defaults to "true", granting allUsers roles/run.invoker on every
-# deploy (this is a public MCP server). Set it to anything else to skip the
-# IAM binding and keep the service private.
+# deploy (this is a public MCP server). Set it to anything else to keep the
+# service private: the binding is then actively removed, so a service left
+# public by an earlier deploy is locked down again.
 #
 # Manual run (full corpus):
 #   gcloud builds submit --no-source --config cloudbuild.yaml \
@@ -129,5 +130,12 @@ steps:
           gcloud run services add-iam-policy-binding ${_SERVICE} \
             --region=${_REGION} --member=allUsers --role=roles/run.invoker
         else
-          echo "Skipping allUsers invoker binding (_PUBLIC=${_PUBLIC})"
+          # Actively revoke the binding so a service made public by an
+          # earlier _PUBLIC="true" deploy does not stay public. The removal
+          # is a no-op error on a fresh service (binding not found), so
+          # tolerate failure.
+          echo "Removing allUsers invoker binding (_PUBLIC=${_PUBLIC})"
+          gcloud run services remove-iam-policy-binding ${_SERVICE} \
+            --region=${_REGION} --member=allUsers --role=roles/run.invoker \
+            --quiet || true
         fi
