@@ -249,6 +249,15 @@ func rescueDanglingParents(lines []string, headings []rawHeading, tocStart, tocE
 			if !ok {
 				continue
 			}
+			// Without precededByBlank, flush-left body prose that starts
+			// with the needed number would match too — RFC 1035's "25
+			// (SMTP).  If this bit is set, ...". A real heading title
+			// starts with an uppercase letter or a digit ("Dynamic
+			// Conformance", "Broadcast Subnetwork IIH PDUs"), never with
+			// punctuation or a lowercase sentence continuation.
+			if c := title[0]; !(c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+				continue
+			}
 			exists[number] = true
 			out = append(out, rawHeading{lineIdx: i, number: number, title: title, level: level, parent: parent, tail: tail})
 			rescued = true

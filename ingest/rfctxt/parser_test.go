@@ -519,6 +519,39 @@ func TestRescueDanglingParentsLeavesUnrescuableDangling(t *testing.T) {
 	}
 }
 
+// TestRescueDanglingParentsRejectsBodyProse guards the rescue re-scan
+// against the very false positive precededByBlank exists to reject:
+// flush-left body prose that starts with the needed number, like RFC
+// 1035's "25 (SMTP).  If this bit is set, ...". The rescue drops the
+// precededByBlank guard by design, so it must reject such lines by
+// their title shape instead — a real heading title starts with an
+// uppercase letter or a digit, not punctuation or a lowercase
+// sentence continuation.
+func TestRescueDanglingParentsRejectsBodyProse(t *testing.T) {
+	lines := []string{
+		"Header",
+		"",
+		"flush-left prose paragraph describing well-known ports, port",
+		"25 (SMTP).  If this bit is set, then an SMTP server should be",
+		"listening on this port.",
+		"",
+		"25.1 Mail Routing",
+		"body text",
+	}
+	headings := []rawHeading{
+		{lineIdx: 6, number: "25.1", title: "Mail Routing", level: 2, parent: "25"},
+	}
+	got := rescueDanglingParents(lines, headings, 0, 0)
+	for _, h := range got {
+		if h.number == "25" {
+			t.Fatalf(`body prose "25 (SMTP). ..." must not be rescued as heading 25, got %+v`, h)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected no rescue to happen, got %d headings: %+v", len(got), got)
+	}
+}
+
 // TestRescueDanglingParentsRespectsTOCExclusion guards against rescuing
 // a heading from inside the document's own Table of Contents block: a
 // TOC line like "7 Protocol Classes 4" (single space before the trailing
