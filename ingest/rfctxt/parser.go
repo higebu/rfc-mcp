@@ -48,10 +48,17 @@ func ParseRFCText(raw []byte, rfcNumber int, title string) ([]Section, error) {
 		if len(tier1) < 3 {
 			// Tier 1 is hopeless — replace it with the TOC-anchored
 			// headings outright, and excise the TOC block from the
-			// header section (it's a location aid, not content).
+			// header section (it's a location aid, not content). Well-
+			// known unnumbered front matter Tier 1 did find (an Abstract
+			// is never listed in its own TOC, so Tier 2 can't recover
+			// it) is grafted back in rather than lost wholesale.
 			if tier2 := detectTier2(lines, tocEnd, tocEntries); len(tier2) >= 2 {
 				headings = tier2
 				excludeStart, excludeEnd = headingIdx, tocEnd
+				if keep := tier1KnownUnnumberedOutside(tier1, tier2, excludeStart, excludeEnd); len(keep) > 0 {
+					headings = append(append([]rawHeading{}, tier2...), keep...)
+					sort.Slice(headings, func(a, b int) bool { return headings[a].lineIdx < headings[b].lineIdx })
+				}
 			}
 		} else if hasUncoveredTOCEntries(tocEntries, tier1) {
 			// Tier 1 is healthy but the TOC lists sections it never
@@ -78,6 +85,38 @@ func ParseRFCText(raw []byte, rfcNumber int, title string) ([]Section, error) {
 	headings = rescueDanglingParents(lines, headings, tocStart, tocEnd)
 	headings = reparentDanglingAncestors(headings)
 	return assembleSections(lines, headings, excludeStart, excludeEnd), nil
+}
+
+// tier1KnownUnnumberedOutside returns the Tier-1 headings worth keeping
+// when Tier 2 replaces Tier 1 wholesale: well-known unnumbered headings
+// (Abstract, Status of This Memo, ... — recognizable by their slug
+// number, which the numbered/lettered path never produces) that sit
+// outside the excised TOC block and that Tier 2 didn't already produce
+// under the same number or on the same line. Tier 1's numbered findings
+// are deliberately not kept — a Tier-1 yield this low means they are as
+// likely false positives as real headings, which is why the wholesale
+// replacement exists.
+func tier1KnownUnnumberedOutside(tier1, tier2 []rawHeading, excludeStart, excludeEnd int) []rawHeading {
+	numbers := make(map[string]bool, len(tier2))
+	taken := make(map[int]bool, len(tier2))
+	for _, h := range tier2 {
+		numbers[h.number] = true
+		taken[h.lineIdx] = true
+	}
+	var keep []rawHeading
+	for _, h := range tier1 {
+		if h.number != slugify(h.title) {
+			continue
+		}
+		if excludeStart <= h.lineIdx && h.lineIdx < excludeEnd {
+			continue
+		}
+		if numbers[h.number] || taken[h.lineIdx] {
+			continue
+		}
+		keep = append(keep, h)
+	}
+	return keep
 }
 
 // tocEntryNumber returns the section number a TOC entry will produce if
@@ -249,6 +288,15 @@ func rescueDanglingParents(lines []string, headings []rawHeading, tocStart, tocE
 			if !ok {
 				continue
 			}
+			// Without precededByBlank, flush-left body prose that starts
+			// with the needed number would match too — RFC 1035's "25
+			// (SMTP).  If this bit is set, ...". A real heading title
+			// starts with an uppercase letter or a digit ("Dynamic
+			// Conformance", "Broadcast Subnetwork IIH PDUs"), never with
+			// punctuation or a lowercase sentence continuation.
+			if c := title[0]; (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
+				continue
+			}
 			exists[number] = true
 			out = append(out, rawHeading{lineIdx: i, number: number, title: title, level: level, parent: parent, tail: tail})
 			rescued = true
@@ -354,16 +402,16 @@ func recomputeLevels(headings []rawHeading) {
 // the first heading is kept as a synthetic "header" section (title-block
 // boilerplate, etc.) rather than silently dropped, unless it's empty.
 // excludeStart/excludeEnd cut the located in-document Table of Contents
-// block out of that header text — Tier 2 must never emit the TOC as a
-// section, since it's just a location aid, not real content.
+// block out of whichever section's content spans it — Tier 2 must never
+// emit the TOC as a section, since it's just a location aid, not real
+// content. The clip applies per section rather than to the header text
+// alone: a heading may legitimately sit before the excluded range (front
+// matter such as an Abstract precedes the TOC), which the old
+// header-only slice arithmetic turned into an out-of-range panic.
 func assembleSections(lines []string, headings []rawHeading, excludeStart, excludeEnd int) []Section {
 	var sections []Section
 
-	headerLines := lines[:headings[0].lineIdx]
-	if excludeEnd > excludeStart {
-		headerLines = append(append([]string{}, lines[:excludeStart]...), lines[excludeEnd:headings[0].lineIdx]...)
-	}
-	if header := joinTrimmed(headerLines); header != "" {
+	if header := joinTrimmed(clipExcluded(lines, 0, headings[0].lineIdx, excludeStart, excludeEnd)); header != "" {
 		sections = append(sections, Section{Number: "header", Title: "Header", Level: 1, Content: header})
 	}
 
@@ -376,7 +424,7 @@ func assembleSections(lines []string, headings []rawHeading, excludeStart, exclu
 		if h.tail != "" {
 			contentLines = append(contentLines, h.tail)
 		}
-		contentLines = append(contentLines, lines[h.lineIdx+1:endIdx]...)
+		contentLines = append(contentLines, clipExcluded(lines, h.lineIdx+1, endIdx, excludeStart, excludeEnd)...)
 		sections = append(sections, Section{
 			Number:       h.number,
 			Title:        h.title,
@@ -386,6 +434,23 @@ func assembleSections(lines []string, headings []rawHeading, excludeStart, exclu
 		})
 	}
 	return sections
+}
+
+// clipExcluded returns lines[start:end] with any overlap of the
+// [excludeStart, excludeEnd) range removed. With no exclusion (or no
+// overlap) it returns the plain subslice without copying.
+func clipExcluded(lines []string, start, end, excludeStart, excludeEnd int) []string {
+	if excludeEnd <= excludeStart || excludeEnd <= start || end <= excludeStart {
+		return lines[start:end]
+	}
+	var out []string
+	if excludeStart > start {
+		out = append(out, lines[start:excludeStart]...)
+	}
+	if excludeEnd < end {
+		out = append(out, lines[excludeEnd:end]...)
+	}
+	return out
 }
 
 // joinTrimmed joins lines with "\n" after dropping leading/trailing
