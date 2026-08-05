@@ -3,6 +3,8 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -197,6 +199,44 @@ func TestFetchRFCText_RetryExhausted(t *testing.T) {
 	}
 	if attempts != 3 {
 		t.Errorf("attempts = %d, want 3", attempts)
+	}
+}
+
+// TestFetchRFCText_TruncatedBodyDetected verifies the pipeline half of
+// issue #13: when the transfer breaks exactly at the size cap (here: a
+// Content-Length promising more bytes than the server delivers), the
+// one-byte probe read's error must surface as a fetch failure instead of
+// being discarded and the truncated data returned as the complete document.
+func TestFetchRFCText_TruncatedBodyDetected(t *testing.T) {
+	origSize := maxFetchSize
+	maxFetchSize = 10
+	t.Cleanup(func() { maxFetchSize = origSize })
+
+	origDelay := retryBaseDelay
+	retryBaseDelay = time.Millisecond
+	t.Cleanup(func() { retryBaseDelay = origDelay })
+
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Promise 20 bytes but deliver only maxFetchSize (10): ReadAll of the
+		// LimitReader succeeds, and the probe read then hits the broken body.
+		w.Header().Set("Content-Length", "20")
+		_, _ = w.Write([]byte(strings.Repeat("x", 10)))
+	}))
+	// Silence the server's "wrote less than declared Content-Length" log.
+	ts.Config.ErrorLog = log.New(io.Discard, "", 0)
+	ts.Start()
+	defer ts.Close()
+	withTestBaseURL(t, ts.URL)
+
+	_, err := FetchRFCText(context.Background(), ts.Client(), 1, t.TempDir())
+	if err == nil {
+		t.Fatal("expected an error for a body truncated mid-transfer")
+	}
+	if strings.Contains(err.Error(), "exceeds maximum size") {
+		t.Errorf("err = %v, want a read failure, not the size-cap error", err)
+	}
+	if !strings.Contains(err.Error(), "unexpected EOF") {
+		t.Errorf("err = %v, want the probe read's unexpected EOF surfaced", err)
 	}
 }
 

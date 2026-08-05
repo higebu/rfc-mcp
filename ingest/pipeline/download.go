@@ -155,10 +155,18 @@ func httpGetOnce(ctx context.Context, client *http.Client, url string) ([]byte, 
 		return nil, err
 	}
 
-	// Detect truncation: if we can read one more byte, the response exceeded the cap.
+	// Detect truncation: if we can read one more byte, the response exceeded
+	// the cap. n == 0 with io.EOF (or nil) means the body really ended at or
+	// under the cap; any other error means the transfer itself broke mid-body
+	// (e.g. a connection cut short of the declared Content-Length), and the
+	// data read so far must not be passed off as the complete document.
 	var extra [1]byte
-	if n, _ := resp.Body.Read(extra[:]); n > 0 {
+	n, err := resp.Body.Read(extra[:])
+	if n > 0 {
 		return nil, fmt.Errorf("%s exceeds maximum size of %d MB", url, maxFetchSize>>20)
+	}
+	if err != nil && err != io.EOF {
+		return nil, fmt.Errorf("read %s: %w", url, err)
 	}
 	return data, nil
 }
