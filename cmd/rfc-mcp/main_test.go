@@ -131,6 +131,39 @@ func TestBearerAuthMiddleware(t *testing.T) {
 			t.Errorf("expected 401, got %d", w.Code)
 		}
 	})
+
+	// Per RFC 7235 the auth-scheme name is case-insensitive.
+	for _, scheme := range []string{"bearer", "BEARER", "BeArEr"} {
+		t.Run("scheme case-insensitive: "+scheme, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/", nil)
+			req.Header.Set("Authorization", scheme+" secret-token")
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Errorf("expected 200 for %q scheme, got %d", scheme, w.Code)
+			}
+		})
+	}
+
+	t.Run("token stays case-sensitive", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("Authorization", "Bearer SECRET-TOKEN")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401 for wrong-case token, got %d", w.Code)
+		}
+	})
+
+	t.Run("scheme only, no token", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("Authorization", "Bearer")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401, got %d", w.Code)
+		}
+	})
 }
 
 // TestBuildInstructions covers the data-freshness line (see freshnessLine)

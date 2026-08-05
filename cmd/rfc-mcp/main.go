@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/higebu/rfc-mcp/db"
@@ -52,10 +53,14 @@ func healthHandler(w http.ResponseWriter, _ *http.Request) {
 }
 
 func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
-	expected := []byte("Bearer " + token)
+	expected := []byte(token)
+	const scheme = "Bearer "
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := []byte(r.Header.Get("Authorization"))
-		if subtle.ConstantTimeCompare(auth, expected) != 1 {
+		// Per RFC 7235 the auth-scheme name is case-insensitive; the token
+		// itself stays case-sensitive and is compared in constant time.
+		auth := r.Header.Get("Authorization")
+		if len(auth) < len(scheme) || !strings.EqualFold(auth[:len(scheme)], scheme) ||
+			subtle.ConstantTimeCompare([]byte(auth[len(scheme):]), expected) != 1 {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
