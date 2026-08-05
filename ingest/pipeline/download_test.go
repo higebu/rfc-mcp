@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +57,42 @@ func TestFetchRFCText_Success(t *testing.T) {
 	}
 	if requests != 1 {
 		t.Errorf("requests after cache hit = %d, want 1 (no new request)", requests)
+	}
+}
+
+// TestFetchRFCText_RawWriteLeavesNoTempFiles pins the atomic raw-cache
+// write (issue #9): after a fetch, rawDir must contain exactly the final
+// rfcN.txt -- the temp file used for the atomic rename must be gone, and
+// the content complete.
+func TestFetchRFCText_RawWriteLeavesNoTempFiles(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("RFC 1 body"))
+	}))
+	defer ts.Close()
+	withTestBaseURL(t, ts.URL)
+
+	rawDir := t.TempDir()
+	if _, err := FetchRFCText(context.Background(), ts.Client(), 1, rawDir); err != nil {
+		t.Fatalf("FetchRFCText: %v", err)
+	}
+
+	entries, err := os.ReadDir(rawDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "rfc1.txt" {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Fatalf("rawDir contents = %v, want exactly [rfc1.txt]", names)
+	}
+	data, err := os.ReadFile(filepath.Join(rawDir, "rfc1.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "RFC 1 body" {
+		t.Errorf("cached body = %q, want %q", data, "RFC 1 body")
 	}
 }
 

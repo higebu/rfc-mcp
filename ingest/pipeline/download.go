@@ -82,7 +82,10 @@ func fetchRFCText(ctx context.Context, client *http.Client, number int, rawDir, 
 		if err := os.MkdirAll(rawDir, 0o755); err != nil {
 			return nil, fmt.Errorf("create raw dir: %w", err)
 		}
-		if err := os.WriteFile(filepath.Join(rawDir, name), data, 0o644); err != nil {
+		// Atomic write (temp file + rename): the read path above trusts any
+		// existing rfcN.txt forever, so a truncated partial write must never
+		// become visible at the final path.
+		if err := writeFileAtomic(rawDir, name, data); err != nil {
 			return nil, fmt.Errorf("write raw file: %w", err)
 		}
 	}
