@@ -54,7 +54,7 @@ type getMetadataOutput struct {
 	Updates     []int           `json:"updates,omitempty"`
 	UpdatedBy   []int           `json:"updated_by,omitempty"`
 	Also        []string        `json:"also,omitempty"`
-	Errata      []errataSummary `json:"errata,omitempty"`
+	Errata      []errataSummary `json:"errata"`
 }
 
 func HandleGetMetadata(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, input GetMetadataInput) (*mcp.CallToolResult, any, error) {
@@ -68,7 +68,7 @@ func HandleGetMetadata(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequ
 			if errors.Is(err, sql.ErrNoRows) {
 				return errorResult(fmt.Sprintf("RFC %d not found%s", input.RFC, rfcRangeHint(d))), nil, nil
 			}
-			return errorResult(fmt.Sprintf("failed to get metadata: %v", err)), nil, nil
+			return internalError(fmt.Sprintf("failed to get metadata for RFC %d", input.RFC), err)
 		}
 		if rfc.NotIssued {
 			return errorResult(fmt.Sprintf("RFC %d was never issued", input.RFC)), nil, nil
@@ -76,9 +76,12 @@ func HandleGetMetadata(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequ
 
 		errataItems, err := d.GetErrataByRFC(input.RFC)
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to get errata: %v", err)), nil, nil
+			return internalError(fmt.Sprintf("failed to get errata for RFC %d", input.RFC), err)
 		}
-		var errata []errataSummary
+		// Always serialize errata, as "[]" when empty -- omitting the key
+		// entirely (omitempty + nil slice) made "no errata" look like
+		// missing data rather than an answered question.
+		errata := []errataSummary{}
 		for _, e := range errataItems {
 			errata = append(errata, errataSummary{ID: e.ID, Status: e.Status, Type: e.Type, Section: e.Section})
 		}
@@ -108,7 +111,7 @@ func HandleGetMetadata(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequ
 
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to marshal: %v", err)), nil, nil
+			return internalError("failed to marshal result", err)
 		}
 
 		return textResult(string(data)), nil, nil

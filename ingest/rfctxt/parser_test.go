@@ -183,6 +183,9 @@ func TestParseRFC1035(t *testing.T) {
 	if got["A"] {
 		t.Errorf(`false-positive section "A" detected from body prose ("A host can participate...")`)
 	}
+	if got["Z"] {
+		t.Errorf(`false-positive section "Z" detected from the 4.1.1 header-field table ("Z               Reserved for future use...")`)
+	}
 
 	s641 := sectionByNumber(t, sections, "6.4.1")
 	if s641.Title != "The contents of inverse queries and responses" {
@@ -516,6 +519,39 @@ func TestRescueDanglingParentsLeavesUnrescuableDangling(t *testing.T) {
 	}
 }
 
+// TestRescueDanglingParentsRejectsBodyProse guards the rescue re-scan
+// against the very false positive precededByBlank exists to reject:
+// flush-left body prose that starts with the needed number, like RFC
+// 1035's "25 (SMTP).  If this bit is set, ...". The rescue drops the
+// precededByBlank guard by design, so it must reject such lines by
+// their title shape instead — a real heading title starts with an
+// uppercase letter or a digit, not punctuation or a lowercase
+// sentence continuation.
+func TestRescueDanglingParentsRejectsBodyProse(t *testing.T) {
+	lines := []string{
+		"Header",
+		"",
+		"flush-left prose paragraph describing well-known ports, port",
+		"25 (SMTP).  If this bit is set, then an SMTP server should be",
+		"listening on this port.",
+		"",
+		"25.1 Mail Routing",
+		"body text",
+	}
+	headings := []rawHeading{
+		{lineIdx: 6, number: "25.1", title: "Mail Routing", level: 2, parent: "25"},
+	}
+	got := rescueDanglingParents(lines, headings, 0, 0)
+	for _, h := range got {
+		if h.number == "25" {
+			t.Fatalf(`body prose "25 (SMTP). ..." must not be rescued as heading 25, got %+v`, h)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected no rescue to happen, got %d headings: %+v", len(got), got)
+	}
+}
+
 // TestRescueDanglingParentsRespectsTOCExclusion guards against rescuing
 // a heading from inside the document's own Table of Contents block: a
 // TOC line like "7 Protocol Classes 4" (single space before the trailing
@@ -541,6 +577,40 @@ func TestRescueDanglingParentsRespectsTOCExclusion(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Fatalf("expected no rescue to happen, got %d headings: %+v", len(got), got)
+	}
+}
+
+// TestAssembleSectionsHeadingBeforeExcludedRange guards the TOC-block
+// exclusion against a heading that sits before the excluded range: the
+// old code assumed the exclusion always fell inside the header text
+// (lines before the first heading) and panicked on the slice
+// lines[excludeEnd:headings[0].lineIdx] otherwise. The excluded block
+// must instead be clipped out of whichever section's content spans it.
+func TestAssembleSectionsHeadingBeforeExcludedRange(t *testing.T) {
+	lines := []string{
+		"Abstract",              // 0: heading before the excluded range
+		"   abstract text",      // 1
+		"",                      // 2
+		"Table of Contents",     // 3: excludeStart
+		"   1. Introduction  2", // 4
+		"",                      // 5: excludeEnd
+		"",                      // 6
+		"1.  Introduction",      // 7
+		"   body text",          // 8
+	}
+	headings := []rawHeading{
+		{lineIdx: 0, number: "abstract", title: "Abstract", level: 1},
+		{lineIdx: 7, number: "1", title: "Introduction", level: 1},
+	}
+	sections := assembleSections(lines, headings, 3, 6)
+
+	abs := sectionByNumber(t, sections, "abstract")
+	if abs.Content != "   abstract text" {
+		t.Errorf("abstract content = %q, want the abstract text with the TOC block clipped out", abs.Content)
+	}
+	intro := sectionByNumber(t, sections, "1")
+	if intro.Content != "   body text" {
+		t.Errorf("section 1 content = %q, want %q", intro.Content, "   body text")
 	}
 }
 
@@ -604,6 +674,53 @@ Wire Format Details
 	}
 	if title := got["wire-format-details"]; title != "Wire Format Details" {
 		t.Errorf("supplement title = %q, want \"Wire Format Details\"", title)
+	}
+}
+
+// TestParseRFCTextWholesaleTier2KeepsFrontMatter covers the wholesale
+// Tier-2 replacement path (Tier 1 hopeless, headings only locatable via
+// the TOC): well-known unnumbered front matter that Tier 1 did find —
+// an Abstract is never listed in its own TOC, so Tier 2 can never
+// recover it — must survive the replacement as its own section instead
+// of being silently merged into the header blob.
+func TestParseRFCTextWholesaleTier2KeepsFrontMatter(t *testing.T) {
+	raw := []byte(`Abstract
+
+   This memo demonstrates the wholesale Tier-2 path.
+
+Table of Contents
+
+   1. Introduction ......... 2
+   2. Details .............. 3` + strings.Repeat("\n", 13) + `
+                            1.  INTRODUCTION
+
+   intro body
+
+                            2.  DETAILS
+
+   details body
+`)
+	sections, err := ParseRFCText(raw, 9999, "Test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]Section)
+	for _, s := range sections {
+		got[s.Number] = s
+	}
+	for _, want := range []string{"abstract", "1", "2"} {
+		if _, ok := got[want]; !ok {
+			t.Fatalf("missing section %q in %+v", want, sections)
+		}
+	}
+	if c := got["abstract"].Content; !strings.Contains(c, "This memo demonstrates") {
+		t.Errorf("abstract content = %q, want the abstract paragraph", c)
+	}
+	if c := got["abstract"].Content; strings.Contains(c, "Introduction .....") {
+		t.Errorf("abstract content = %q, must not contain the excised TOC listing", c)
+	}
+	if got["table-of-contents"].Number != "" {
+		t.Errorf("the TOC block itself must stay excised, got %+v", got["table-of-contents"])
 	}
 }
 

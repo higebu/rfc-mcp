@@ -325,6 +325,71 @@ func TestInsertRFCWithSections(t *testing.T) {
 	}
 }
 
+// TestInsertRFCWithSections_MismatchedRFCNumber verifies a section carrying
+// a different RFC number than the rfc row being inserted is rejected: the
+// scoped delete and the insert would otherwise silently disagree.
+func TestInsertRFCWithSections_MismatchedRFCNumber(t *testing.T) {
+	d := setupTestDB(t)
+
+	rfc := RFC{Number: 2119, Title: "Key words", Stream: "IETF"}
+	sections := []Section{
+		{RFC: 2119, Number: "1", Title: "Ok", Level: 1, Content: "fine"},
+		{RFC: 4271, Number: "2", Title: "Wrong RFC", Level: 1, Content: "mismatch"},
+	}
+	if err := d.InsertRFCWithSections(rfc, sections); err == nil {
+		t.Fatal("expected error for mismatched section RFC number, got nil")
+	}
+
+	// The whole transaction must have rolled back: nothing persisted for 2119,
+	// and RFC 4271's own sections are untouched.
+	toc, err := d.GetTOC(2119)
+	if err != nil {
+		t.Fatalf("GetTOC(2119): %v", err)
+	}
+	if len(toc) != 0 {
+		t.Fatalf("expected rollback to leave no sections for 2119, got %d", len(toc))
+	}
+	toc, err = d.GetTOC(4271)
+	if err != nil {
+		t.Fatalf("GetTOC(4271): %v", err)
+	}
+	if len(toc) != 2 {
+		t.Fatalf("expected RFC 4271's 2 seeded sections to be untouched, got %d", len(toc))
+	}
+}
+
+// TestGetSection_NonexistentAnchorWithSubsections verifies the recursive
+// descendant walk does not fabricate results for a section number that has
+// no row of its own, even when other rows' parent_number happens to point at
+// that number.
+func TestGetSection_NonexistentAnchorWithSubsections(t *testing.T) {
+	d := setupTestDB(t)
+
+	// A dangling child: parent_number points at "9", which has no row.
+	if err := d.Exec(`INSERT INTO sections (rfc, number, title, level, parent_number, content) VALUES
+		(9293, '9.1', 'Dangling Child', 2, '9', 'orphan content')`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	sections, err := d.GetSection(9293, "9", true)
+	if err != nil {
+		t.Fatalf("GetSection: %v", err)
+	}
+	if len(sections) != 0 {
+		t.Fatalf("expected 0 sections for a nonexistent anchor, got %d: %+v", len(sections), sections)
+	}
+
+	// An existing anchor still returns itself plus descendants (regression
+	// guard for the added existence check).
+	sections, err = d.GetSection(9293, "3", true)
+	if err != nil {
+		t.Fatalf("GetSection(3): %v", err)
+	}
+	if len(sections) != 3 {
+		t.Fatalf("expected 3 sections (3, 3.1, 3.1.1), got %d", len(sections))
+	}
+}
+
 // TestInsertRFCWithSections_ReupsertKeepsFTSConsistent verifies the
 // delete-then-insert upsert pattern: re-inserting the same RFC must not
 // leave stale or duplicate rows in the FTS index.
