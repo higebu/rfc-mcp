@@ -580,6 +580,40 @@ func TestRescueDanglingParentsRespectsTOCExclusion(t *testing.T) {
 	}
 }
 
+// TestAssembleSectionsHeadingBeforeExcludedRange guards the TOC-block
+// exclusion against a heading that sits before the excluded range: the
+// old code assumed the exclusion always fell inside the header text
+// (lines before the first heading) and panicked on the slice
+// lines[excludeEnd:headings[0].lineIdx] otherwise. The excluded block
+// must instead be clipped out of whichever section's content spans it.
+func TestAssembleSectionsHeadingBeforeExcludedRange(t *testing.T) {
+	lines := []string{
+		"Abstract",              // 0: heading before the excluded range
+		"   abstract text",      // 1
+		"",                      // 2
+		"Table of Contents",     // 3: excludeStart
+		"   1. Introduction  2", // 4
+		"",                      // 5: excludeEnd
+		"",                      // 6
+		"1.  Introduction",      // 7
+		"   body text",          // 8
+	}
+	headings := []rawHeading{
+		{lineIdx: 0, number: "abstract", title: "Abstract", level: 1},
+		{lineIdx: 7, number: "1", title: "Introduction", level: 1},
+	}
+	sections := assembleSections(lines, headings, 3, 6)
+
+	abs := sectionByNumber(t, sections, "abstract")
+	if abs.Content != "   abstract text" {
+		t.Errorf("abstract content = %q, want the abstract text with the TOC block clipped out", abs.Content)
+	}
+	intro := sectionByNumber(t, sections, "1")
+	if intro.Content != "   body text" {
+		t.Errorf("section 1 content = %q, want %q", intro.Content, "   body text")
+	}
+}
+
 func TestParseRFCTextEmptyTitleUsesRFCNumber(t *testing.T) {
 	raw := []byte("No headings at all, just one line.\n")
 	sections, err := ParseRFCText(raw, 42, "")

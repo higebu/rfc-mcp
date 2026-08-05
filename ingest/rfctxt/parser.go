@@ -363,16 +363,16 @@ func recomputeLevels(headings []rawHeading) {
 // the first heading is kept as a synthetic "header" section (title-block
 // boilerplate, etc.) rather than silently dropped, unless it's empty.
 // excludeStart/excludeEnd cut the located in-document Table of Contents
-// block out of that header text — Tier 2 must never emit the TOC as a
-// section, since it's just a location aid, not real content.
+// block out of whichever section's content spans it — Tier 2 must never
+// emit the TOC as a section, since it's just a location aid, not real
+// content. The clip applies per section rather than to the header text
+// alone: a heading may legitimately sit before the excluded range (front
+// matter such as an Abstract precedes the TOC), which the old
+// header-only slice arithmetic turned into an out-of-range panic.
 func assembleSections(lines []string, headings []rawHeading, excludeStart, excludeEnd int) []Section {
 	var sections []Section
 
-	headerLines := lines[:headings[0].lineIdx]
-	if excludeEnd > excludeStart {
-		headerLines = append(append([]string{}, lines[:excludeStart]...), lines[excludeEnd:headings[0].lineIdx]...)
-	}
-	if header := joinTrimmed(headerLines); header != "" {
+	if header := joinTrimmed(clipExcluded(lines, 0, headings[0].lineIdx, excludeStart, excludeEnd)); header != "" {
 		sections = append(sections, Section{Number: "header", Title: "Header", Level: 1, Content: header})
 	}
 
@@ -385,7 +385,7 @@ func assembleSections(lines []string, headings []rawHeading, excludeStart, exclu
 		if h.tail != "" {
 			contentLines = append(contentLines, h.tail)
 		}
-		contentLines = append(contentLines, lines[h.lineIdx+1:endIdx]...)
+		contentLines = append(contentLines, clipExcluded(lines, h.lineIdx+1, endIdx, excludeStart, excludeEnd)...)
 		sections = append(sections, Section{
 			Number:       h.number,
 			Title:        h.title,
@@ -395,6 +395,23 @@ func assembleSections(lines []string, headings []rawHeading, excludeStart, exclu
 		})
 	}
 	return sections
+}
+
+// clipExcluded returns lines[start:end] with any overlap of the
+// [excludeStart, excludeEnd) range removed. With no exclusion (or no
+// overlap) it returns the plain subslice without copying.
+func clipExcluded(lines []string, start, end, excludeStart, excludeEnd int) []string {
+	if excludeEnd <= excludeStart || excludeEnd <= start || end <= excludeStart {
+		return lines[start:end]
+	}
+	var out []string
+	if excludeStart > start {
+		out = append(out, lines[start:excludeStart]...)
+	}
+	if excludeEnd < end {
+		out = append(out, lines[excludeEnd:end]...)
+	}
+	return out
 }
 
 // joinTrimmed joins lines with "\n" after dropping leading/trailing
