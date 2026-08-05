@@ -7,6 +7,12 @@ on:
 
 permissions: {}
 
+# A re-pushed tag must not race an in-flight run to create the same release;
+# queue instead of cancelling so the newest push still runs to completion.
+concurrency:
+  group: goreleaser-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
