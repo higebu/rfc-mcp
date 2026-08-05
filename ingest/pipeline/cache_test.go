@@ -80,6 +80,26 @@ func TestSaveAndLoadCache(t *testing.T) {
 	}
 }
 
+// TestWriteFileAtomic_Mode: the temp file os.CreateTemp creates is 0600
+// and os.Rename preserves that, so writeFileAtomic must chmod to 0644
+// before the rename -- otherwise cached files silently become owner-only
+// readable, breaking shared cache/raw-dir setups.
+func TestWriteFileAtomic_Mode(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := writeFileAtomic(dir, "test.txt", []byte("hello")); err != nil {
+		t.Fatalf("writeFileAtomic: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(dir, "test.txt"))
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := info.Mode().Perm() & 0o777; got != 0o644 {
+		t.Errorf("file mode = %o, want 644", got)
+	}
+}
+
 func TestLoadCache_Expired(t *testing.T) {
 	dir := withTempCacheDir(t)
 

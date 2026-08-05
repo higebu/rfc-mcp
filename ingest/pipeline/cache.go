@@ -95,6 +95,14 @@ func writeFileAtomic(dir, name string, data []byte) error {
 		return err
 	}
 
+	// os.CreateTemp creates the file with mode 0600 and os.Rename keeps
+	// it; widen to the conventional 0644 so cached files stay readable in
+	// shared cache/raw-dir setups (matching a plain os.WriteFile 0644).
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+
 	if err := os.Rename(tmpPath, filepath.Join(dir, name)); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("rename temp file: %w", err)
