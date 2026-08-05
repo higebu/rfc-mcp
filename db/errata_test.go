@@ -62,15 +62,40 @@ func TestReplaceAllErrata(t *testing.T) {
 		t.Fatalf("expected 1 new errata with id 100, got %+v", items)
 	}
 
-	// Replacing with an empty slice clears the table entirely.
-	if err := d.ReplaceAllErrata(nil); err != nil {
-		t.Fatalf("ReplaceAllErrata(nil): %v", err)
+}
+
+// TestReplaceAllErrata_EmptySetRefused covers the safety net: a valid but
+// empty errata.json must not wipe previously stored errata.
+func TestReplaceAllErrata_EmptySetRefused(t *testing.T) {
+	d := setupTestDB(t)
+
+	// Seed data holds 2 errata for RFC 4271: an empty replace is refused.
+	if err := d.ReplaceAllErrata(nil); err == nil {
+		t.Fatal("ReplaceAllErrata(nil) over a non-empty table: expected error, got nil")
 	}
-	items, err = d.GetErrataByRFC(9293)
+
+	// The stored rows must be untouched by the refused replace.
+	items, err := d.GetErrataByRFC(4271)
 	if err != nil {
-		t.Fatalf("GetErrataByRFC(9293) after clear: %v", err)
+		t.Fatalf("GetErrataByRFC(4271): %v", err)
 	}
-	if len(items) != 0 {
-		t.Fatalf("expected 0 errata after clearing, got %d", len(items))
+	if len(items) != 2 {
+		t.Fatalf("expected 2 errata to survive the refused replace, got %d", len(items))
+	}
+}
+
+// TestReplaceAllErrata_EmptyOverEmpty covers empty items over an empty
+// table: a no-op success, not an error.
+func TestReplaceAllErrata_EmptyOverEmpty(t *testing.T) {
+	d := setupTestDB(t)
+	if err := d.Exec("DELETE FROM errata"); err != nil {
+		t.Fatalf("clear errata: %v", err)
+	}
+
+	if err := d.ReplaceAllErrata(nil); err != nil {
+		t.Fatalf("ReplaceAllErrata(nil) over an empty table: %v", err)
+	}
+	if err := d.ReplaceAllErrata([]Errata{}); err != nil {
+		t.Fatalf("ReplaceAllErrata(empty) over an empty table: %v", err)
 	}
 }

@@ -368,7 +368,7 @@ func (p *Pipeline) processOne(ctx context.Context, number int) (string, error) {
 	if err := p.DB.InsertRFCWithSections(rfc, dbSections); err != nil {
 		return "FETCH_FAILED", fmt.Errorf("insert rfc %d: %w", number, err)
 	}
-	if err := p.DB.InsertReferences(refs); err != nil {
+	if err := p.replaceReferences(number, refs); err != nil {
 		return "FETCH_FAILED", fmt.Errorf("insert references for rfc %d: %w", number, err)
 	}
 
@@ -641,6 +641,17 @@ func (p *Pipeline) importRaw(number int, raw []byte) error {
 
 	if err := p.DB.InsertRFCWithSections(*rfc, dbSections); err != nil {
 		return fmt.Errorf("insert rfc %d: %w", number, err)
+	}
+	return p.replaceReferences(number, refs)
+}
+
+// replaceReferences persists the newly extracted references for an RFC.
+// InsertReferences already deletes stale rows for every source RFC present
+// in refs, but an empty set gives it nothing to scope that delete to, so a
+// re-parse that yields no references must clear the old rows explicitly.
+func (p *Pipeline) replaceReferences(number int, refs []db.Reference) error {
+	if len(refs) == 0 {
+		return p.DB.DeleteReferencesForRFC(number)
 	}
 	return p.DB.InsertReferences(refs)
 }
