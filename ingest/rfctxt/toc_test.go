@@ -357,11 +357,11 @@ func TestFindTOCBlockPullBackKeepsColumnAlignedEntry(t *testing.T) {
 		"",                  // 1
 		"1.       Protocol Overview ....................................    4", // 2
 		"B.       ACAP Keyword Index ...................................   66", // 3
-		"C.       Full Copyright Statement",     // 4: trailer-less entry
-		"",                                      // 5
-		"untitled front-matter prose line one",  // 6
-		"untitled front-matter prose line two",  // 7
-		"untitled front-matter prose line tres", // 8
+		"C.       Full Copyright Statement",                                    // 4: trailer-less entry
+		"",                                                                     // 5
+		"untitled front-matter prose line one",                                 // 6
+		"untitled front-matter prose line two",                                 // 7
+		"untitled front-matter prose line tres",                                // 8
 	}
 	_, start, end, found := findTOCBlock(lines)
 	if !found {
@@ -382,12 +382,12 @@ func TestFindTOCBlockPullBackKeepsColumnAlignedEntry(t *testing.T) {
 // common modern body shape — must still be pulled back out.
 func TestFindTOCBlockPullBackStillRecoversNarrowGapHeading(t *testing.T) {
 	lines := []string{
-		"Table of Contents", // 0
-		"",                  // 1
-		"PART ONE",          // 2
-		"",                  // 3
-		"1.  Overview",      // 4: body's first heading, narrow gap
-		"",                  // 5
+		"Table of Contents",          // 0
+		"",                           // 1
+		"PART ONE",                   // 2
+		"",                           // 3
+		"1.  Overview",               // 4: body's first heading, narrow gap
+		"",                           // 5
 		"prose line one runs here",   // 6
 		"prose line two runs here",   // 7
 		"prose line three runs here", // 8
@@ -398,6 +398,43 @@ func TestFindTOCBlockPullBackStillRecoversNarrowGapHeading(t *testing.T) {
 	}
 	if end != 4 {
 		t.Errorf("end = %d, want 4 (the narrow-gap body heading is pulled back out)", end)
+	}
+}
+
+// TestDetectTier2DuplicateEntryLeavesStackAlone: a TOC entry whose
+// number was already seen is skipped, but the old code popped the
+// parent stack down to the duplicate's level before the seen check ran,
+// so a stray duplicate of a top-level entry (a wrapped or repeated
+// listing line) orphaned every deeper entry that followed it.
+func TestDetectTier2DuplicateEntryLeavesStackAlone(t *testing.T) {
+	lines := []string{
+		"body starts here",
+		"",
+		"Alpha",
+		"",
+		"Beta",
+		"",
+		"Alpha",
+		"",
+		"Gamma",
+		"",
+	}
+	entries := []tocEntry{
+		{number: "1", title: "Alpha", indent: 0},
+		{number: "1.1", title: "Beta", indent: 3},
+		{number: "1", title: "Alpha", indent: 0}, // stray duplicate
+		{number: "1.2", title: "Gamma", indent: 3},
+	}
+	headings := detectTier2(lines, 0, entries)
+	byNumber := make(map[string]rawHeading, len(headings))
+	for _, h := range headings {
+		byNumber[h.number] = h
+	}
+	if len(headings) != 3 {
+		t.Fatalf("expected 3 headings (duplicate skipped), got %d: %+v", len(headings), headings)
+	}
+	if got := byNumber["1.2"].parent; got != "1" {
+		t.Errorf(`"1.2": got parent=%q, want "1" (the duplicate must not pop the real parent frame)`, got)
 	}
 }
 

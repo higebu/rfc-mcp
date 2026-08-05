@@ -309,6 +309,18 @@ func detectTier2(lines []string, tocEnd int, entries []tocEntry) []rawHeading {
 			// flatten them to siblings with no parent link.
 			level = d
 		}
+		number := l.entry.number
+		if number == "" {
+			number = slugify(l.entry.title)
+		}
+		// The duplicate check must run before any stack manipulation: a
+		// stray duplicate of a shallow entry would otherwise pop the
+		// real parent frames on its way to being skipped, orphaning
+		// every deeper entry that follows it.
+		if seen[number] {
+			continue
+		}
+		seen[number] = true
 		for len(stack) > 0 && stack[len(stack)-1].level >= level {
 			stack = stack[:len(stack)-1]
 		}
@@ -316,14 +328,6 @@ func detectTier2(lines []string, tocEnd int, entries []tocEntry) []rawHeading {
 		if len(stack) > 0 {
 			parent = stack[len(stack)-1].number
 		}
-		number := l.entry.number
-		if number == "" {
-			number = slugify(l.entry.title)
-		}
-		if seen[number] {
-			continue
-		}
-		seen[number] = true
 		out = append(out, rawHeading{lineIdx: l.lineIdx, number: number, title: l.entry.title, level: level, parent: parent})
 		stack = append(stack, frame{level, number})
 	}
