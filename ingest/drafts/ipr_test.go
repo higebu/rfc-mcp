@@ -383,6 +383,90 @@ func TestReplacedDrafts_Paged(t *testing.T) {
 	}
 }
 
+// TestFetchIPR_PageCapExhausted: when the disclosure pagination walk hits
+// datatrackerMaxPages with the last page still full, more rows likely
+// remain -- FetchIPR must fail rather than return (and cache for an hour)
+// a truncated disclosure list as success.
+func TestFetchIPR_PageCapExhausted(t *testing.T) {
+	origCap := datatrackerMaxPages
+	datatrackerMaxPages = 3
+	defer func() { datatrackerMaxPages = origCap }()
+
+	fullPage := func(offset int) string {
+		objects := make([]string, datatrackerPageLimit)
+		for i := range objects {
+			id := offset + i
+			objects[i] = fmt.Sprintf(
+				`{"id": %d, "title": "Disclosure %d", "state": "/api/v1/name/iprdisclosurestatename/posted/",
+				  "holder_legal_name": "Holder %d", "docs": ["/api/v1/doc/document/draft-capped-ipr/"]}`, id, id, id)
+		}
+		return "[" + strings.Join(objects, ",") + "]"
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/doc/document/draft-capped-ipr/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"name": "draft-capped-ipr", "title": "A Draft"}`))
+	})
+	mux.HandleFunc("/api/v1/doc/relateddocument/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"meta": {"total_count": 0}, "objects": []}`))
+	})
+	// Every page is full, no matter the offset: the walk can never finish.
+	mux.HandleFunc("/api/v1/ipr/holderiprdisclosure/", func(w http.ResponseWriter, r *http.Request) {
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		_, _ = fmt.Fprintf(w, `{"objects": %s}`, fullPage(offset))
+	})
+	mux.HandleFunc("/api/v1/ipr/thirdpartyiprdisclosure/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"objects": []}`))
+	})
+	mux.HandleFunc("/api/v1/ipr/genericiprdisclosure/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"objects": []}`))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	withTestRoots(t, ts.URL)
+	cacheHome := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheHome)
+
+	_, err := FetchIPR(context.Background(), ts.Client(), 0, "draft-capped-ipr")
+	if err == nil {
+		t.Fatal("FetchIPR = nil error, want a failure when the page cap is exhausted with pages still full")
+	}
+	if !strings.Contains(err.Error(), "truncated") {
+		t.Errorf("err = %v, want it to say the list would be truncated", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(cacheHome, "rfc-mcp", "drafts", "ipr", "draft-capped-ipr.json")); !os.IsNotExist(statErr) {
+		t.Errorf("cache stat = %v, want no IPR result cached on the error path", statErr)
+	}
+}
+
+// TestReplacedDrafts_PageCapExhausted: the replaces walk shares the same
+// contract -- exhausting the page cap on still-full pages is an error, not
+// a silently truncated result.
+func TestReplacedDrafts_PageCapExhausted(t *testing.T) {
+	origCap := datatrackerMaxPages
+	datatrackerMaxPages = 2
+	defer func() { datatrackerMaxPages = origCap }()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/doc/relateddocument/", func(w http.ResponseWriter, r *http.Request) {
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		objects := make([]string, datatrackerPageLimit)
+		for i := range objects {
+			objects[i] = fmt.Sprintf(`{"originaltargetaliasname": "draft-old-%d", "target": ""}`, offset+i)
+		}
+		_, _ = fmt.Fprintf(w, `{"meta": {}, "objects": [%s]}`, strings.Join(objects, ","))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	withTestRoots(t, ts.URL)
+
+	if _, err := replacedDrafts(context.Background(), ts.Client(), "draft-new"); err == nil {
+		t.Fatal("replacedDrafts = nil error, want a failure when the page cap is exhausted with pages still full")
+	} else if !strings.Contains(err.Error(), "truncated") {
+		t.Errorf("err = %v, want it to say the list would be truncated", err)
+	}
+}
+
 func TestFetchIPR_RejectsInvalidDraftName(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("no request should be made for an invalid draft name")

@@ -158,14 +158,16 @@ func draftForRFC(ctx context.Context, client *http.Client, rfcName string) (stri
 }
 
 // datatrackerPageLimit is the page size used when walking a Datatracker
-// list endpoint's offset pagination, and datatrackerMaxPages a safety cap
-// on how many pages one walk may fetch (5000 rows -- far beyond any real
-// per-document disclosure or replaces count) so a misbehaving endpoint
-// can't turn one lookup into an unbounded request loop.
-const (
-	datatrackerPageLimit = 100
-	datatrackerMaxPages  = 50
-)
+// list endpoint's offset pagination.
+const datatrackerPageLimit = 100
+
+// datatrackerMaxPages is a safety cap on how many pages one pagination
+// walk may fetch (5000 rows -- far beyond any real per-document disclosure
+// or replaces count) so a misbehaving endpoint can't turn one lookup into
+// an unbounded request loop. Reaching the cap with the last page still
+// full is an error, not a silent truncation: an incomplete list must never
+// be returned (and cached) as success. A var so tests can lower it.
+var datatrackerMaxPages = 50
 
 // replacedDrafts returns the draft name(s) that name directly replaces
 // (one hop only, matching FetchIPR's fan-out rule -- a replaced draft's
@@ -176,7 +178,12 @@ const (
 // document URI depending on the row's age.
 func replacedDrafts(ctx context.Context, client *http.Client, name string) ([]string, error) {
 	var out []string
-	for page, offset := 0, 0; page < datatrackerMaxPages; page++ {
+	for page, offset := 0, 0; ; page++ {
+		if page == datatrackerMaxPages {
+			// Only reachable when every page so far was full, i.e. more
+			// rows likely remain: fail rather than return a truncated list.
+			return nil, fmt.Errorf("replaces lookup for %s not exhausted after %d pages (%d rows); refusing to return a truncated list", name, datatrackerMaxPages, len(out))
+		}
 		q := url.Values{}
 		q.Set("source__name", name)
 		q.Set("relationship__slug", "replaces")
@@ -210,7 +217,13 @@ func replacedDrafts(ctx context.Context, client *http.Client, name string) ([]st
 func fetchDisclosuresForDoc(ctx context.Context, client *http.Client, docName string) ([]Disclosure, error) {
 	var out []Disclosure
 	for _, kind := range iprDisclosureKinds {
-		for page, offset := 0, 0; page < datatrackerMaxPages; page++ {
+		for page, offset := 0, 0; ; page++ {
+			if page == datatrackerMaxPages {
+				// Only reachable when every page so far was full, i.e. more
+				// rows likely remain: fail rather than return a truncated
+				// list.
+				return nil, fmt.Errorf("%s disclosures for %s not exhausted after %d pages (%d rows); refusing to return a truncated list", kind, docName, datatrackerMaxPages, len(out))
+			}
 			q := url.Values{}
 			q.Set("docs__name", docName)
 			q.Set("format", "json")
