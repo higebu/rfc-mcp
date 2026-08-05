@@ -699,6 +699,13 @@ func TestCmdUpdate(t *testing.T) {
 	if _, err := os.Stat(dbPath + ".new"); !os.IsNotExist(err) {
 		t.Errorf("expected no leftover %s.new file after update, stat err = %v", dbPath, err)
 	}
+	// The checkpoint+close must leave the renamed DB self-contained: no
+	// working-copy WAL/SHM sidecars may survive next to the .new path.
+	for _, suffix := range []string{".new-wal", ".new-shm"} {
+		if _, err := os.Stat(dbPath + suffix); !os.IsNotExist(err) {
+			t.Errorf("expected no leftover %s%s file after update, stat err = %v", dbPath, suffix, err)
+		}
+	}
 
 	d, err := db.Open(dbPath)
 	if err != nil {

@@ -72,6 +72,23 @@ func (d *DB) ExecScript(script string) error {
 	return err
 }
 
+// WALCheckpointTruncate runs PRAGMA wal_checkpoint(TRUNCATE) and verifies
+// its result row: it returns an error if the checkpoint could not run or
+// reported busy (readers/writers prevented the WAL from being fully
+// checkpointed and truncated). On success the WAL has been folded into the
+// main database file and truncated to zero length, so the main file is
+// self-contained.
+func (d *DB) WALCheckpointTruncate() error {
+	var busy, logFrames, checkpointed int
+	if err := d.conn.QueryRow("PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logFrames, &checkpointed); err != nil {
+		return fmt.Errorf("wal_checkpoint(TRUNCATE): %w", err)
+	}
+	if busy != 0 {
+		return fmt.Errorf("wal_checkpoint(TRUNCATE): checkpoint blocked (busy=%d, log=%d, checkpointed=%d)", busy, logFrames, checkpointed)
+	}
+	return nil
+}
+
 // VacuumInto creates a compact, consistent copy of the database at path.
 func (d *DB) VacuumInto(path string) error {
 	_, err := d.conn.Exec("VACUUM INTO ?", path)

@@ -216,8 +216,17 @@ func cmdUpdate(args []string) {
 	}
 
 	// Checkpoint WAL into the main file so the renamed DB is self-contained.
-	_ = d.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
-	_ = d.Close()
+	// Only remove the -wal/-shm sidecars once the checkpoint and close are
+	// confirmed; on failure abort before the rename so the old DB stays live.
+	if err := d.WALCheckpointTruncate(); err != nil {
+		_ = d.Close()
+		removeWorkingCopy(newPath)
+		log.Fatalf("Failed to checkpoint working copy: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		removeWorkingCopy(newPath)
+		log.Fatalf("Failed to close working copy: %v", err)
+	}
 	_ = os.Remove(newPath + "-wal")
 	_ = os.Remove(newPath + "-shm")
 

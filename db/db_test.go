@@ -1,6 +1,7 @@
 package db
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -197,5 +198,38 @@ func TestVacuumInto(t *testing.T) {
 	}
 	if len(results) == 0 {
 		t.Error("expected FTS index to survive VACUUM INTO")
+	}
+}
+
+// TestWALCheckpointTruncate verifies the checkpoint helper cmdUpdate relies
+// on before renaming the working copy over the live database: after a
+// successful TRUNCATE checkpoint the WAL sidecar holds no unwritten frames
+// (it is truncated to zero length), so the main file is self-contained. It
+// also verifies errors are surfaced rather than swallowed (closed handle).
+func TestWALCheckpointTruncate(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "wal.db")
+	d, err := OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadWrite: %v", err)
+	}
+	if err := d.InitSchema(); err != nil {
+		t.Fatalf("InitSchema: %v", err)
+	}
+	if err := d.Exec("INSERT INTO rfcs (number, title) VALUES (1, 'seed')"); err != nil {
+		t.Fatalf("Exec insert: %v", err)
+	}
+
+	if err := d.WALCheckpointTruncate(); err != nil {
+		t.Fatalf("WALCheckpointTruncate: %v", err)
+	}
+	if info, statErr := os.Stat(dbPath + "-wal"); statErr == nil && info.Size() != 0 {
+		t.Errorf("WAL sidecar not truncated after checkpoint: %d bytes", info.Size())
+	}
+
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := d.WALCheckpointTruncate(); err == nil {
+		t.Error("expected error from WALCheckpointTruncate on a closed handle")
 	}
 }
