@@ -56,7 +56,7 @@ func removePagination(lines []string) []string {
 	out := make([]string, 0, len(lines))
 	afterFF := false
 	for _, line := range lines {
-		if line == "\f" {
+		if strings.HasPrefix(line, "\f") {
 			for len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
 				out = out[:len(out)-1]
 			}
@@ -64,7 +64,15 @@ func removePagination(lines []string) []string {
 				out = out[:len(out)-1]
 			}
 			afterFF = true
-			continue
+			// The form feed isn't always alone on its line: RFC 2244
+			// glues it to the front of the running header ("\fRFC 2244
+			// ... November 1997"), and trailing whitespace occurs too.
+			// Strip the FF and let any non-blank remainder fall through
+			// as the page's first line.
+			line = strings.TrimPrefix(line, "\f")
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
 		}
 		if afterFF {
 			if strings.TrimSpace(line) == "" {

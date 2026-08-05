@@ -114,6 +114,43 @@ func TestRemovePagination(t *testing.T) {
 			},
 		},
 		{
+			// RFC 2244 page iv->v: the form feed is glued to the front of
+			// the running header ("\fRFC 2244  ACAP  November 1997") rather
+			// than sitting alone on its line. The break must still strip
+			// the preceding footer, the FF itself, and the header.
+			name: "form feed glued to the running header (RFC 2244)",
+			in: []string{
+				"some content",
+				"",
+				"Newman & Myers              Standards Track                    [Page iv]",
+				"\fRFC 2244                          ACAP                     November 1997",
+				"",
+				"ACAP Protocol Specification",
+			},
+			want: []string{
+				"some content",
+				"",
+				"",
+				"ACAP Protocol Specification",
+			},
+		},
+		{
+			// A page-break line with trailing whitespace after the form
+			// feed must still be recognized as a page break.
+			name: "form feed with trailing whitespace",
+			in: []string{
+				"some content",
+				"Author                                                        [Page 1]",
+				"\f ",
+				"RFC 9999                     Some Title                       June 2001",
+				"body text",
+			},
+			want: []string{
+				"some content",
+				"body text",
+			},
+		},
+		{
 			// RFC 1142 scatters form feeds mid-sentence (even mid-word:
 			// "manual\fArea\fAddresses"), with no footers and no running
 			// headers anywhere; the continuation line after each break is
