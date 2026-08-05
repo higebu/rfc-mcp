@@ -47,7 +47,18 @@ func OpenReadWrite(path string) (*DB, error) {
 	// The same file: URI escaping as Open: modernc.org/sqlite URL-parses
 	// even bare paths, so an unescaped '%', '?', or '#' in the path
 	// mis-parses (invalid escape, or spurious query/fragment split).
-	conn, err := sql.Open("sqlite", "file:"+sqliteURIEscaper.Replace(path))
+	//
+	// PRAGMA foreign_keys is per-connection, so it is set via the driver's
+	// _pragma DSN parameter (modernc.org/sqlite runs each _pragma=... at
+	// connection open) rather than a one-shot Exec on the pool, which would
+	// only cover whatever connection happened to serve it. The schema
+	// declares sections.rfc REFERENCES rfcs(number); without this pragma
+	// SQLite never enforces it. Enforcement is safe with the existing write
+	// paths: InsertRFCWithSections upserts the parent rfcs row before
+	// inserting sections in the same transaction, and INSERT OR REPLACE on a
+	// parent with live children nets out at statement end. rfc_references
+	// deliberately has no FK -- its targets may be RFCs not (yet) imported.
+	conn, err := sql.Open("sqlite", "file:"+sqliteURIEscaper.Replace(path)+"?_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -58,15 +69,6 @@ func OpenReadWrite(path string) (*DB, error) {
 	}
 	if _, err := conn.Exec("PRAGMA busy_timeout=5000"); err != nil {
 		log.Printf("warning: failed to set busy_timeout: %v", err)
-	}
-	// The schema declares sections.rfc REFERENCES rfcs(number); without this
-	// pragma SQLite never enforces it. Enforcement is safe with the existing
-	// write paths: InsertRFCWithSections upserts the parent rfcs row before
-	// inserting sections in the same transaction, and INSERT OR REPLACE on a
-	// parent with live children nets out at statement end. rfc_references
-	// deliberately has no FK -- its targets may be RFCs not (yet) imported.
-	if _, err := conn.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		log.Printf("warning: failed to enable foreign_keys: %v", err)
 	}
 	if err := conn.Ping(); err != nil {
 		_ = conn.Close()

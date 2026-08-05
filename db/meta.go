@@ -22,8 +22,12 @@ func (d *DB) LookupMeta(key string) (value string, ok bool, err error) {
 		return value, true, nil
 	case errors.Is(err, sql.ErrNoRows):
 		return "", false, nil
-	case strings.Contains(err.Error(), "no such table"):
-		// Pre-meta-table database: treat as absent, not an error.
+	case strings.Contains(err.Error(), "no such table: meta"):
+		// Pre-meta-table database: treat as absent, not an error. The match
+		// names the meta table explicitly (modernc.org/sqlite reports
+		// "SQL logic error: no such table: meta (1)") so an unrelated
+		// missing-table error -- e.g. a view whose backing table was dropped
+		// -- still propagates as a failure below.
 		return "", false, nil
 	default:
 		return "", false, fmt.Errorf("get meta %s: %w", key, err)

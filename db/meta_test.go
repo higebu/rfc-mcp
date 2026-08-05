@@ -80,6 +80,30 @@ func TestLookupMeta(t *testing.T) {
 	}
 }
 
+// TestLookupMeta_OtherMissingTableIsError guards the tightened missing-table
+// match: only the meta table itself being absent counts as "key absent". An
+// error mentioning a *different* missing table -- here a meta view whose
+// backing table was dropped -- must propagate, not be swallowed as absence.
+func TestLookupMeta_OtherMissingTableIsError(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "broken-view.db")
+	d, err := OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadWrite: %v", err)
+	}
+	defer d.Close()
+	if err := d.ExecScript(`
+		CREATE TABLE vanished (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+		CREATE VIEW meta AS SELECT key, value FROM vanished;
+		DROP TABLE vanished;
+	`); err != nil {
+		t.Fatalf("set up broken meta view: %v", err)
+	}
+
+	if _, ok, err := d.LookupMeta("built_at"); err == nil {
+		t.Errorf("LookupMeta with a broken meta view: err = nil (ok=%v), want the missing-backing-table error", ok)
+	}
+}
+
 func TestLookupMeta_PropagatesErrors(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "closed.db")
 	d, err := OpenReadWrite(dbPath)

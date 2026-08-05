@@ -195,11 +195,21 @@ func TestOpen_PathWithSpecialChars(t *testing.T) {
 	}
 }
 
-// TestOpenReadWrite_ForeignKeysEnforced verifies PRAGMA foreign_keys=ON is
+// TestOpenReadWrite_ForeignKeysEnforced verifies foreign-key enforcement is
 // active on read-write handles: a sections row referencing a nonexistent RFC
-// must be rejected.
+// must be rejected. The pragma travels in the DSN (_pragma=foreign_keys(1)),
+// so it applies to every connection the pool opens, not just the one that
+// happened to serve a one-shot Exec.
 func TestOpenReadWrite_ForeignKeysEnforced(t *testing.T) {
 	d := setupTestDB(t)
+
+	var fk int
+	if err := d.conn.QueryRow("PRAGMA foreign_keys").Scan(&fk); err != nil {
+		t.Fatalf("query PRAGMA foreign_keys: %v", err)
+	}
+	if fk != 1 {
+		t.Errorf("PRAGMA foreign_keys = %d, want 1", fk)
+	}
 
 	err := d.Exec(
 		"INSERT INTO sections (rfc, number, title, level, content) VALUES (?, ?, ?, ?, ?)",
