@@ -176,7 +176,13 @@ func findTOCBlock(lines []string) (headingIdx, start, end int, found bool) {
 		// followed by its first subsection with no prose in between. A
 		// line with any strippable page-number tail stays inside — it's
 		// a TOC entry whose page number is written with just one space
-		// (RFC 1305), not a body heading.
+		// (RFC 1305), not a body heading. So does a line whose title is
+		// column-aligned far from its numbering token (gap > 3): that's
+		// a trailer-less TOC entry lined up with its siblings' titles
+		// (RFC 2244's "C.       Full Copyright Statement"), not the
+		// narrow-gap body heading this pull-back exists to recover —
+		// without the gap cap, the blank-skipping walk-back would reach
+		// across the TOC's own end boundary and pull it out.
 		for range 2 {
 			j := end - 1
 			for j >= start && strings.TrimSpace(lines[j]) == "" {
@@ -189,6 +195,9 @@ func findTOCBlock(lines []string) (headingIdx, start, end int, found bool) {
 			trimmedPrev := strings.TrimSpace(prev)
 			if len(prev) != len(strings.TrimLeft(prev, " ")) || !isHeadingLine(prev) ||
 				stripTOCTrailer(trimmedPrev) != trimmedPrev {
+				break
+			}
+			if m := headingRE.FindStringSubmatch(prev); m != nil && len(m[0])-len(m[1])-len(m[2]) > 3 {
 				break
 			}
 			end = j

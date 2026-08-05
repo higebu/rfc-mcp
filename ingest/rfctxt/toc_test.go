@@ -344,6 +344,63 @@ func TestFindTOCBlockBacktracksBodyHeading(t *testing.T) {
 	}
 }
 
+// TestFindTOCBlockPullBackKeepsColumnAlignedEntry: the prose-run
+// pull-back must not reach across the TOC's own blank-line boundary and
+// pull a genuine trailer-less TOC entry (RFC 2244's "C.       Full
+// Copyright Statement" shape) out of the block. Such an entry is
+// column-aligned — its title sits far from the numbering token to line
+// up with its sibling entries' titles — while the body headings the
+// pull-back exists to recover ("1.  Overview") keep a narrow gap.
+func TestFindTOCBlockPullBackKeepsColumnAlignedEntry(t *testing.T) {
+	lines := []string{
+		"Table of Contents", // 0
+		"",                  // 1
+		"1.       Protocol Overview ....................................    4", // 2
+		"B.       ACAP Keyword Index ...................................   66", // 3
+		"C.       Full Copyright Statement",     // 4: trailer-less entry
+		"",                                      // 5
+		"untitled front-matter prose line one",  // 6
+		"untitled front-matter prose line two",  // 7
+		"untitled front-matter prose line tres", // 8
+	}
+	_, start, end, found := findTOCBlock(lines)
+	if !found {
+		t.Fatal("expected to find TOC heading")
+	}
+	if end != 6 {
+		t.Errorf("end = %d, want 6 (the column-aligned C entry stays inside the block)", end)
+	}
+	entries := parseTOCEntries(lines, start, end)
+	if len(entries) != 3 || entries[2].number != "C" {
+		t.Errorf("entries = %+v, want the trailer-less C entry kept as the last entry", entries)
+	}
+}
+
+// TestFindTOCBlockPullBackStillRecoversNarrowGapHeading is the
+// regression guard alongside the above: a narrow-gap body heading
+// separated from the following prose paragraph by a blank line — the
+// common modern body shape — must still be pulled back out.
+func TestFindTOCBlockPullBackStillRecoversNarrowGapHeading(t *testing.T) {
+	lines := []string{
+		"Table of Contents", // 0
+		"",                  // 1
+		"PART ONE",          // 2
+		"",                  // 3
+		"1.  Overview",      // 4: body's first heading, narrow gap
+		"",                  // 5
+		"prose line one runs here",   // 6
+		"prose line two runs here",   // 7
+		"prose line three runs here", // 8
+	}
+	_, _, end, found := findTOCBlock(lines)
+	if !found {
+		t.Fatal("expected to find TOC heading")
+	}
+	if end != 4 {
+		t.Errorf("end = %d, want 4 (the narrow-gap body heading is pulled back out)", end)
+	}
+}
+
 func TestParseTOCEntriesStopsAtListOfFigures(t *testing.T) {
 	lines := []string{
 		"1.       Introduction   1",
