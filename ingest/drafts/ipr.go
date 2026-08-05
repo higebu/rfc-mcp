@@ -148,76 +148,102 @@ func draftForRFC(ctx context.Context, client *http.Client, rfcName string) (stri
 	return lastPathSegment(raw.Objects[0].Source), nil
 }
 
+// datatrackerPageLimit is the page size used when walking a Datatracker
+// list endpoint's offset pagination, and datatrackerMaxPages a safety cap
+// on how many pages one walk may fetch (5000 rows -- far beyond any real
+// per-document disclosure or replaces count) so a misbehaving endpoint
+// can't turn one lookup into an unbounded request loop.
+const (
+	datatrackerPageLimit = 100
+	datatrackerMaxPages  = 50
+)
+
 // replacedDrafts returns the draft name(s) that name directly replaces
 // (one hop only, matching FetchIPR's fan-out rule -- a replaced draft's
-// own replaces chain is not followed). Reuses metadata.go's
+// own replaces chain is not followed), following offset pagination until
+// the endpoint is exhausted. Reuses metadata.go's
 // rawRelatedDocumentResponse; see relatedTargetName for why the replaced
 // draft's name can live in either originaltargetaliasname or the target
 // document URI depending on the row's age.
 func replacedDrafts(ctx context.Context, client *http.Client, name string) ([]string, error) {
-	q := url.Values{}
-	q.Set("source__name", name)
-	q.Set("relationship__slug", "replaces")
-	q.Set("format", "json")
-	q.Set("limit", "100")
-	reqURL := DatatrackerRoot + "/api/v1/doc/relateddocument/?" + q.Encode()
+	var out []string
+	for page, offset := 0, 0; page < datatrackerMaxPages; page++ {
+		q := url.Values{}
+		q.Set("source__name", name)
+		q.Set("relationship__slug", "replaces")
+		q.Set("format", "json")
+		q.Set("limit", strconv.Itoa(datatrackerPageLimit))
+		q.Set("offset", strconv.Itoa(offset))
+		reqURL := DatatrackerRoot + "/api/v1/doc/relateddocument/?" + q.Encode()
 
-	data, err := httpGetWithRetry(ctx, client, reqURL)
-	if err != nil {
-		return nil, err
-	}
-	var raw rawRelatedDocumentResponse
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("parse replaces lookup for %s: %w", name, err)
-	}
-	out := make([]string, 0, len(raw.Objects))
-	for _, o := range raw.Objects {
-		out = append(out, relatedTargetName(o.OriginalTargetAliasName, o.Target))
+		data, err := httpGetWithRetry(ctx, client, reqURL)
+		if err != nil {
+			return nil, err
+		}
+		var raw rawRelatedDocumentResponse
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return nil, fmt.Errorf("parse replaces lookup for %s: %w", name, err)
+		}
+		for _, o := range raw.Objects {
+			out = append(out, relatedTargetName(o.OriginalTargetAliasName, o.Target))
+		}
+		if len(raw.Objects) < datatrackerPageLimit {
+			break
+		}
+		offset += len(raw.Objects)
 	}
 	return out, nil
 }
 
 // fetchDisclosuresForDoc queries all three IPR disclosure resource kinds
-// for docName and returns the ones in includedIPRState.
+// for docName, following each kind's offset pagination until exhausted,
+// and returns the disclosures in includedIPRState.
 func fetchDisclosuresForDoc(ctx context.Context, client *http.Client, docName string) ([]Disclosure, error) {
 	var out []Disclosure
 	for _, kind := range iprDisclosureKinds {
-		q := url.Values{}
-		q.Set("docs__name", docName)
-		q.Set("format", "json")
-		q.Set("limit", "100")
-		reqURL := DatatrackerRoot + "/api/v1/ipr/" + kind + "/?" + q.Encode()
+		for page, offset := 0, 0; page < datatrackerMaxPages; page++ {
+			q := url.Values{}
+			q.Set("docs__name", docName)
+			q.Set("format", "json")
+			q.Set("limit", strconv.Itoa(datatrackerPageLimit))
+			q.Set("offset", strconv.Itoa(offset))
+			reqURL := DatatrackerRoot + "/api/v1/ipr/" + kind + "/?" + q.Encode()
 
-		data, err := httpGetWithRetry(ctx, client, reqURL)
-		if err != nil {
-			return nil, fmt.Errorf("fetch %s disclosures for %s: %w", kind, docName, err)
-		}
-		var raw rawIPRListResponse
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return nil, fmt.Errorf("parse %s disclosures for %s: %w", kind, docName, err)
-		}
+			data, err := httpGetWithRetry(ctx, client, reqURL)
+			if err != nil {
+				return nil, fmt.Errorf("fetch %s disclosures for %s: %w", kind, docName, err)
+			}
+			var raw rawIPRListResponse
+			if err := json.Unmarshal(data, &raw); err != nil {
+				return nil, fmt.Errorf("parse %s disclosures for %s: %w", kind, docName, err)
+			}
 
-		for _, o := range raw.Objects {
-			if lastPathSegment(o.State) != includedIPRState {
-				continue
+			for _, o := range raw.Objects {
+				if lastPathSegment(o.State) != includedIPRState {
+					continue
+				}
+				docs := make([]string, len(o.Docs))
+				for i, d := range o.Docs {
+					docs[i] = lastPathSegment(d)
+				}
+				out = append(out, Disclosure{
+					ID:               o.ID,
+					URL:              DatatrackerRoot + "/ipr/" + strconv.Itoa(o.ID) + "/",
+					Title:            o.Title,
+					State:            lastPathSegment(o.State),
+					Holder:           o.HolderLegalName,
+					Licensing:        lastPathSegment(o.Licensing),
+					HasPatentPending: o.HasPatentPending,
+					PatentInfo:       o.PatentInfo,
+					Statement:        o.Statement,
+					Time:             o.Time,
+					Docs:             docs,
+				})
 			}
-			docs := make([]string, len(o.Docs))
-			for i, d := range o.Docs {
-				docs[i] = lastPathSegment(d)
+			if len(raw.Objects) < datatrackerPageLimit {
+				break
 			}
-			out = append(out, Disclosure{
-				ID:               o.ID,
-				URL:              DatatrackerRoot + "/ipr/" + strconv.Itoa(o.ID) + "/",
-				Title:            o.Title,
-				State:            lastPathSegment(o.State),
-				Holder:           o.HolderLegalName,
-				Licensing:        lastPathSegment(o.Licensing),
-				HasPatentPending: o.HasPatentPending,
-				PatentInfo:       o.PatentInfo,
-				Statement:        o.Statement,
-				Time:             o.Time,
-				Docs:             docs,
-			})
+			offset += len(raw.Objects)
 		}
 	}
 	return out, nil
@@ -286,14 +312,19 @@ func FetchIPR(ctx context.Context, client *http.Client, rfc int, name string) (I
 		}
 	}
 	// One-hop "replaces" fan-out from every draft name gathered so far
-	// (the RFC's originating draft, or the queried draft itself).
+	// (the RFC's originating draft, or the queried draft itself). A failed
+	// lookup fails the whole call: silently dropping the replaced drafts
+	// would return -- and cache for an hour -- an incomplete disclosure
+	// list that misrepresents a document's IPR encumbrance.
 	for _, d := range append([]string(nil), docs...) {
 		if !strings.HasPrefix(d, "draft-") {
 			continue
 		}
-		if replaced, err := replacedDrafts(ctx, client, d); err == nil {
-			docs = append(docs, replaced...)
+		replaced, err := replacedDrafts(ctx, client, d)
+		if err != nil {
+			return IPRResult{}, fmt.Errorf("look up drafts replaced by %s: %w", d, err)
 		}
+		docs = append(docs, replaced...)
 	}
 	docs = dedupeNonEmpty(docs)
 

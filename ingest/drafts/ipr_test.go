@@ -2,11 +2,16 @@ package drafts
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // newIPRTestServer builds an httptest.Server mimicking the Datatracker
@@ -237,6 +242,127 @@ func TestFetchIPR_UnknownDoc(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "rfc404") {
 		t.Errorf("err = %v, want it to name the attempted document", err)
+	}
+}
+
+// TestFetchIPR_ReplacedDraftsErrorPropagates is a regression test: a
+// failed replaces lookup used to be silently ignored, returning -- and
+// caching for an hour -- an incomplete disclosure list. It must now fail
+// the FetchIPR call, and nothing may be cached on the error path.
+func TestFetchIPR_ReplacedDraftsErrorPropagates(t *testing.T) {
+	origDelay := retryBaseDelay
+	retryBaseDelay = time.Millisecond
+	defer func() { retryBaseDelay = origDelay }()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/doc/document/draft-err-ipr/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"name": "draft-err-ipr", "title": "A Draft"}`))
+	})
+	mux.HandleFunc("/api/v1/doc/relateddocument/", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	withTestRoots(t, ts.URL)
+	cacheHome := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheHome)
+
+	_, err := FetchIPR(context.Background(), ts.Client(), 0, "draft-err-ipr")
+	if err == nil {
+		t.Fatal("FetchIPR = nil error, want the replaces lookup failure propagated")
+	}
+	if !strings.Contains(err.Error(), "draft-err-ipr") {
+		t.Errorf("err = %v, want it to name the draft whose replaces lookup failed", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(cacheHome, "rfc-mcp", "drafts", "ipr", "draft-err-ipr.json")); !os.IsNotExist(statErr) {
+		t.Errorf("cache stat = %v, want no IPR result cached on the error path", statErr)
+	}
+}
+
+// TestFetchIPR_PagedDisclosures: disclosure lists used to be truncated at
+// the Datatracker's limit=100 page size. FetchIPR must follow offset
+// pagination until the endpoint is exhausted.
+func TestFetchIPR_PagedDisclosures(t *testing.T) {
+	const total = 130 // 100 on the first page, 30 on the second
+
+	pagedObjects := func(offset, limit int) string {
+		n := min(limit, total-offset)
+		var objects []string
+		for i := range n {
+			id := offset + i
+			objects = append(objects, fmt.Sprintf(
+				`{"id": %d, "title": "Disclosure %d", "state": "/api/v1/name/iprdisclosurestatename/posted/",
+				  "holder_legal_name": "Holder %d", "docs": ["/api/v1/doc/document/draft-paged-ipr/"]}`, id, id, id))
+		}
+		return "[" + strings.Join(objects, ",") + "]"
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/doc/document/draft-paged-ipr/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"name": "draft-paged-ipr", "title": "A Draft"}`))
+	})
+	mux.HandleFunc("/api/v1/doc/relateddocument/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"meta": {"total_count": 0}, "objects": []}`))
+	})
+	mux.HandleFunc("/api/v1/ipr/holderiprdisclosure/", func(w http.ResponseWriter, r *http.Request) {
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		_, _ = fmt.Fprintf(w, `{"objects": %s}`, pagedObjects(offset, limit))
+	})
+	mux.HandleFunc("/api/v1/ipr/thirdpartyiprdisclosure/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"objects": []}`))
+	})
+	mux.HandleFunc("/api/v1/ipr/genericiprdisclosure/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"objects": []}`))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	withTestRoots(t, ts.URL)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	result, err := FetchIPR(context.Background(), ts.Client(), 0, "draft-paged-ipr")
+	if err != nil {
+		t.Fatalf("FetchIPR: %v", err)
+	}
+	if result.TotalCount != total {
+		t.Fatalf("TotalCount = %d, want %d (pagination must be followed past the first 100 rows)", result.TotalCount, total)
+	}
+	for i, d := range result.Disclosures {
+		if d.ID != i {
+			t.Fatalf("Disclosures[%d].ID = %d, want %d (all pages collected, sorted by ID)", i, d.ID, i)
+		}
+	}
+}
+
+// TestReplacedDrafts_Paged: the one-hop replaces lookup must follow offset
+// pagination too, not stop at the first 100 rows.
+func TestReplacedDrafts_Paged(t *testing.T) {
+	const total = 102
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/doc/relateddocument/", func(w http.ResponseWriter, r *http.Request) {
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		n := min(limit, total-offset)
+		var objects []string
+		for i := range n {
+			objects = append(objects, fmt.Sprintf(
+				`{"originaltargetaliasname": "draft-old-%d", "target": ""}`, offset+i))
+		}
+		_, _ = fmt.Fprintf(w, `{"meta": {"total_count": %d}, "objects": [%s]}`, total, strings.Join(objects, ","))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	withTestRoots(t, ts.URL)
+
+	replaced, err := replacedDrafts(context.Background(), ts.Client(), "draft-new")
+	if err != nil {
+		t.Fatalf("replacedDrafts: %v", err)
+	}
+	if len(replaced) != total {
+		t.Fatalf("len(replaced) = %d, want %d", len(replaced), total)
+	}
+	if replaced[0] != "draft-old-0" || replaced[total-1] != fmt.Sprintf("draft-old-%d", total-1) {
+		t.Errorf("replaced[0], replaced[last] = %q, %q", replaced[0], replaced[total-1])
 	}
 }
 
