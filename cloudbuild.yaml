@@ -5,9 +5,22 @@
 # it is not associated with a GitHub commit and posts no GitHub status check.
 # The same config works for both one-off and scheduled deploys.
 #
+# Source pinning: this config is designed for scheduled/manual `--no-source`
+# runs, where Cloud Build's $COMMIT_SHA is not populated, so a mutable branch
+# ref (_REF) is the default way to choose what to build — a scheduled run is
+# expected to pick up the branch tip. To pin a build to an exact upstream
+# commit, set _COMMIT (a full commit SHA); it takes precedence over _REF.
+# Whatever gets checked out, its commit SHA becomes the image tag, so the
+# deployed image is always addressed by an immutable per-commit tag (:latest
+# is still pushed as a convenience alias but never deployed).
+#
 # _FROM_RFC / _TO_RFC default to empty, baking in the full RFC corpus (~9800
 # RFCs). Set them to restrict the database to a numeric RFC range, e.g. for a
 # fast smoke-test image.
+#
+# _PUBLIC defaults to "true", granting allUsers roles/run.invoker on every
+# deploy (this is a public MCP server). Set it to anything else to skip the
+# IAM binding and keep the service private.
 #
 # Manual run (full corpus):
 #   gcloud builds submit --no-source --config cloudbuild.yaml \
@@ -27,11 +40,13 @@
 
 substitutions:
   _REF: "main"
+  _COMMIT: ""
   _FROM_RFC: ""
   _TO_RFC: ""
   _REGION: "asia-northeast1"
   _REPO: "rfc-mcp"
   _SERVICE: "rfc-mcp"
+  _PUBLIC: "true"
 
 options:
   # The database build fetches ~9800 RFCs individually (no bulk tarball); give
@@ -48,29 +63,49 @@ timeout: 3600s
 steps:
   - id: clone
     name: gcr.io/cloud-builders/git
+    entrypoint: bash
     args:
-      - clone
-      - --depth=1
-      - --branch=${_REF}
-      - https://github.com/higebu/rfc-mcp
-      - repo
+      - -ceu
+      - |
+        git clone --filter=blob:none --no-checkout https://github.com/higebu/rfc-mcp repo
+        cd repo
+        if [ -n "${_COMMIT}" ]; then
+          git fetch origin "${_COMMIT}"
+          git checkout --detach "${_COMMIT}"
+        else
+          git fetch --depth=1 origin "${_REF}"
+          git checkout --detach FETCH_HEAD
+        fi
+        # The checked-out commit becomes the immutable image tag, shared with
+        # the later steps via the workspace.
+        git rev-parse --short=12 HEAD > /workspace/image_tag
 
   - id: build
     name: gcr.io/cloud-builders/docker
     dir: repo
+    entrypoint: bash
     args:
-      - build
-      - --build-arg=FROM_RFC=${_FROM_RFC}
-      - --build-arg=TO_RFC=${_TO_RFC}
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:latest
-      - .
+      - -ceu
+      - |
+        IMAGE="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}"
+        TAG="$$(cat /workspace/image_tag)"
+        docker build \
+          --build-arg=FROM_RFC=${_FROM_RFC} \
+          --build-arg=TO_RFC=${_TO_RFC} \
+          -t "$$IMAGE:$$TAG" \
+          -t "$$IMAGE:latest" \
+          .
 
   - id: push
     name: gcr.io/cloud-builders/docker
+    entrypoint: bash
     args:
-      - push
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:latest
+      - -ceu
+      - |
+        IMAGE="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}"
+        TAG="$$(cat /workspace/image_tag)"
+        docker push "$$IMAGE:$$TAG"
+        docker push "$$IMAGE:latest"
 
   # Deploy via a service spec so we can configure the startup/liveness probes
   # (gcloud run deploy has no flags for probes). add-iam-policy-binding replaces
@@ -83,10 +118,16 @@ steps:
       - -c
       - |
         set -euo pipefail
+        IMAGE="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}"
+        TAG="$$(cat /workspace/image_tag)"
         sed \
           -e "s|__SERVICE__|${_SERVICE}|g" \
-          -e "s|__IMAGE__|${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:latest|g" \
+          -e "s|__IMAGE__|$$IMAGE:$$TAG|g" \
           service.yaml > /workspace/service.rendered.yaml
         gcloud run services replace /workspace/service.rendered.yaml --region=${_REGION}
-        gcloud run services add-iam-policy-binding ${_SERVICE} \
-          --region=${_REGION} --member=allUsers --role=roles/run.invoker
+        if [ "${_PUBLIC}" = "true" ]; then
+          gcloud run services add-iam-policy-binding ${_SERVICE} \
+            --region=${_REGION} --member=allUsers --role=roles/run.invoker
+        else
+          echo "Skipping allUsers invoker binding (_PUBLIC=${_PUBLIC})"
+        fi
