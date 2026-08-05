@@ -240,6 +240,19 @@ func TestFetchIPR_UnknownDoc(t *testing.T) {
 	}
 }
 
+func TestFetchIPR_RejectsInvalidDraftName(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("no request should be made for an invalid draft name")
+	}))
+	defer ts.Close()
+	withTestRoots(t, ts.URL)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	if _, err := FetchIPR(context.Background(), ts.Client(), 0, "../../escape"); err == nil {
+		t.Error("FetchIPR accepted a name containing ../, want a validation error")
+	}
+}
+
 func TestFetchIPR_CacheHit(t *testing.T) {
 	var iprRequests atomic.Int32
 	ts := newIPRTestServer(t, &iprRequests)

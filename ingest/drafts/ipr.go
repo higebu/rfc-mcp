@@ -259,6 +259,10 @@ func FetchIPR(ctx context.Context, client *http.Client, rfc int, name string) (I
 	isRFC := rfc > 0
 	if isRFC {
 		primary = fmt.Sprintf("rfc%d", rfc)
+	} else if err := validateDraftName(name); err != nil {
+		// name flows into a cache path and request URLs below; reject
+		// anything that isn't a plausible draft name up front.
+		return IPRResult{}, err
 	}
 	if err := verifyDocExists(ctx, client, primary); err != nil {
 		return IPRResult{}, err

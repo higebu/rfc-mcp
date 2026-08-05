@@ -38,6 +38,10 @@ type Metadata struct {
 // base draft name (no revision suffix) -- see the package doc comment.
 // Cached on disk per name for metadataCacheTTL.
 func FetchMetadata(ctx context.Context, client *http.Client, name string) (Metadata, error) {
+	if err := validateDraftName(name); err != nil {
+		return Metadata{}, err
+	}
+
 	cacheKey := "meta/" + name + ".json"
 	if data, err := loadCache(cacheKey, metadataCacheTTL); err == nil && data != nil {
 		var cached Metadata
