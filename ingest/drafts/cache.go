@@ -1,7 +1,9 @@
 package drafts
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -40,7 +42,14 @@ func loadCache(relPath string, ttl time.Duration) ([]byte, error) {
 		return nil, nil // expired
 	}
 
-	return os.ReadFile(path)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		// The file vanished between the Stat above and this read (e.g. a
+		// concurrent cache cleanup): that's a miss per this function's
+		// contract, not an error.
+		return nil, nil
+	}
+	return data, err
 }
 
 // saveCache writes data to a cache file atomically via rename.

@@ -12,17 +12,11 @@ import (
 	"time"
 )
 
-// withTestRoots redirects DatatrackerRoot/ArchiveRoot to url for the
+// withTestRoots redirects the Datatracker/archive roots to url for the
 // duration of the test, mirroring ingest/pipeline's withTestBaseURL.
 func withTestRoots(t *testing.T, url string) {
 	t.Helper()
-	origDT, origArchive := DatatrackerRoot, ArchiveRoot
-	DatatrackerRoot = url
-	ArchiveRoot = url
-	t.Cleanup(func() {
-		DatatrackerRoot = origDT
-		ArchiveRoot = origArchive
-	})
+	t.Cleanup(SetRoots(url, url))
 }
 
 const searchResponseBody = `{

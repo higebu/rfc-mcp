@@ -88,9 +88,14 @@ type rawIPRListResponse struct {
 
 // lastPathSegment extracts the trailing path component of a Datatracker
 // resource URI, e.g. "/api/v1/name/iprdisclosurestatename/posted/" ->
-// "posted", "/api/v1/doc/document/rfc3261/" -> "rfc3261". Returns "" for
-// "" (a field the API omitted for a given disclosure kind).
+// "posted", "/api/v1/doc/document/rfc3261/" -> "rfc3261". A query string
+// or fragment on the URI (e.g. "/doc/document/rfc9000/?format=json") is
+// stripped rather than swallowed into the segment. Returns "" for "" (a
+// field the API omitted for a given disclosure kind).
 func lastPathSegment(uri string) string {
+	if u, err := url.Parse(uri); err == nil {
+		uri = u.Path
+	}
 	uri = strings.TrimSuffix(uri, "/")
 	if uri == "" {
 		return ""
@@ -107,7 +112,7 @@ func lastPathSegment(uri string) string {
 // zero results -- so an unknown RFC number or draft name would otherwise
 // look identical to a real document with no disclosures.
 func verifyDocExists(ctx context.Context, client *http.Client, name string) error {
-	reqURL := DatatrackerRoot + "/api/v1/doc/document/" + url.PathEscape(name) + "/?format=json"
+	reqURL := DatatrackerRoot() + "/api/v1/doc/document/" + url.PathEscape(name) + "/?format=json"
 	_, err := httpGetWithRetry(ctx, client, reqURL)
 	return err
 }
@@ -132,7 +137,11 @@ func draftForRFC(ctx context.Context, client *http.Client, rfcName string) (stri
 	q.Set("target__name", rfcName)
 	q.Set("relationship__slug", "became_rfc")
 	q.Set("format", "json")
-	reqURL := DatatrackerRoot + "/api/v1/doc/relateddocument/?" + q.Encode()
+	// Only the first row is read below, so pin which row that is: order
+	// deterministically and let the server send just one.
+	q.Set("order_by", "id")
+	q.Set("limit", "1")
+	reqURL := DatatrackerRoot() + "/api/v1/doc/relateddocument/?" + q.Encode()
 
 	data, err := httpGetWithRetry(ctx, client, reqURL)
 	if err != nil {
@@ -174,7 +183,7 @@ func replacedDrafts(ctx context.Context, client *http.Client, name string) ([]st
 		q.Set("format", "json")
 		q.Set("limit", strconv.Itoa(datatrackerPageLimit))
 		q.Set("offset", strconv.Itoa(offset))
-		reqURL := DatatrackerRoot + "/api/v1/doc/relateddocument/?" + q.Encode()
+		reqURL := DatatrackerRoot() + "/api/v1/doc/relateddocument/?" + q.Encode()
 
 		data, err := httpGetWithRetry(ctx, client, reqURL)
 		if err != nil {
@@ -207,7 +216,7 @@ func fetchDisclosuresForDoc(ctx context.Context, client *http.Client, docName st
 			q.Set("format", "json")
 			q.Set("limit", strconv.Itoa(datatrackerPageLimit))
 			q.Set("offset", strconv.Itoa(offset))
-			reqURL := DatatrackerRoot + "/api/v1/ipr/" + kind + "/?" + q.Encode()
+			reqURL := DatatrackerRoot() + "/api/v1/ipr/" + kind + "/?" + q.Encode()
 
 			data, err := httpGetWithRetry(ctx, client, reqURL)
 			if err != nil {
@@ -228,7 +237,7 @@ func fetchDisclosuresForDoc(ctx context.Context, client *http.Client, docName st
 				}
 				out = append(out, Disclosure{
 					ID:               o.ID,
-					URL:              DatatrackerRoot + "/ipr/" + strconv.Itoa(o.ID) + "/",
+					URL:              DatatrackerRoot() + "/ipr/" + strconv.Itoa(o.ID) + "/",
 					Title:            o.Title,
 					State:            lastPathSegment(o.State),
 					Holder:           o.HolderLegalName,

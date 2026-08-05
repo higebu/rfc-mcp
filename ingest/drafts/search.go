@@ -99,7 +99,7 @@ func SearchDrafts(ctx context.Context, client *http.Client, params SearchParams)
 	q.Set("limit", strconv.Itoa(limit))
 	q.Set("offset", strconv.Itoa(params.Offset))
 
-	reqURL := DatatrackerRoot + "/api/v1/doc/document/?" + q.Encode()
+	reqURL := DatatrackerRoot() + "/api/v1/doc/document/?" + q.Encode()
 	data, err := httpGetWithRetry(ctx, client, reqURL)
 	if err != nil {
 		return SearchResult{}, err
@@ -235,7 +235,7 @@ func searchDraftsMultiWord(ctx context.Context, client *http.Client, params Sear
 		q.Set("limit", strconv.Itoa(multiWordPageSize))
 		q.Set("offset", strconv.Itoa(serverOffset))
 
-		reqURL := DatatrackerRoot + "/api/v1/doc/document/?" + q.Encode()
+		reqURL := DatatrackerRoot() + "/api/v1/doc/document/?" + q.Encode()
 		data, err := httpGetWithRetry(ctx, client, reqURL)
 		if err != nil {
 			return SearchResult{}, err

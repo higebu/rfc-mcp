@@ -12,8 +12,8 @@ import (
 	"github.com/higebu/rfc-mcp/ingest/drafts"
 )
 
-// redirectDraftsRoots points ingest/drafts' package-level DatatrackerRoot/
-// ArchiveRoot vars at url for the duration of the test (they're exported
+// redirectDraftsRoots points ingest/drafts' Datatracker/archive roots at
+// url for the duration of the test (drafts.SetRoots is exported
 // specifically so callers outside ingest/drafts, like this package's
 // tests, can redirect them -- see that package's doc comment), and
 // returns a restore func. It also isolates the on-disk draft cache in a
@@ -22,13 +22,7 @@ import (
 func redirectDraftsRoots(t *testing.T, url string) func() {
 	t.Helper()
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	origDT, origArchive := drafts.DatatrackerRoot, drafts.ArchiveRoot
-	drafts.DatatrackerRoot = url
-	drafts.ArchiveRoot = url
-	return func() {
-		drafts.DatatrackerRoot = origDT
-		drafts.ArchiveRoot = origArchive
-	}
+	return drafts.SetRoots(url, url)
 }
 
 // draftTestBody is a small, real-shaped draft plain-text body: an

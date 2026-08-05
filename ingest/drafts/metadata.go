@@ -50,7 +50,7 @@ func FetchMetadata(ctx context.Context, client *http.Client, name string) (Metad
 		}
 	}
 
-	reqURL := DatatrackerRoot + "/api/v1/doc/document/" + url.PathEscape(name) + "/?format=json"
+	reqURL := DatatrackerRoot() + "/api/v1/doc/document/" + url.PathEscape(name) + "/?format=json"
 	data, err := httpGetWithRetry(ctx, client, reqURL)
 	if err != nil {
 		return Metadata{}, err
@@ -127,7 +127,11 @@ func becameRFC(ctx context.Context, client *http.Client, name string) (int, erro
 	q.Set("source__name", name)
 	q.Set("relationship__slug", "became_rfc")
 	q.Set("format", "json")
-	reqURL := DatatrackerRoot + "/api/v1/doc/relateddocument/?" + q.Encode()
+	// Only the first row is read below, so pin which row that is: order
+	// deterministically and let the server send just one.
+	q.Set("order_by", "id")
+	q.Set("limit", "1")
+	reqURL := DatatrackerRoot() + "/api/v1/doc/relateddocument/?" + q.Encode()
 
 	data, err := httpGetWithRetry(ctx, client, reqURL)
 	if err != nil {

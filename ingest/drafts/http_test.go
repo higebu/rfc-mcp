@@ -19,6 +19,18 @@ func setMaxFetchSize(t *testing.T, n int64) {
 	t.Cleanup(func() { maxFetchSize = orig })
 }
 
+// TestFallbackClientHasTimeout guards the nil-client fallback: it must
+// never be the timeout-less http.DefaultClient, or a stalled connection
+// could hang a fetch forever.
+func TestFallbackClientHasTimeout(t *testing.T) {
+	if fallbackClient == http.DefaultClient {
+		t.Fatal("fallbackClient is http.DefaultClient, want a dedicated client with a timeout")
+	}
+	if fallbackClient.Timeout <= 0 {
+		t.Errorf("fallbackClient.Timeout = %v, want > 0", fallbackClient.Timeout)
+	}
+}
+
 func TestHTTPGetOnce_ExactCapSizeSucceeds(t *testing.T) {
 	setMaxFetchSize(t, 8)
 	body := bytes.Repeat([]byte("a"), 8)

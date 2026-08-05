@@ -25,7 +25,7 @@ func FetchText(ctx context.Context, client *http.Client, name, rev string) ([]by
 		return data, nil
 	}
 
-	reqURL := ArchiveRoot + "/" + url.PathEscape(name+"-"+rev+".txt")
+	reqURL := ArchiveRoot() + "/" + url.PathEscape(name+"-"+rev+".txt")
 	data, err := httpGetWithRetry(ctx, client, reqURL)
 	if err != nil {
 		return nil, err

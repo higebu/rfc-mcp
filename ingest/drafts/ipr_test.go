@@ -245,6 +245,23 @@ func TestFetchIPR_UnknownDoc(t *testing.T) {
 	}
 }
 
+func TestLastPathSegment(t *testing.T) {
+	cases := map[string]string{
+		"/api/v1/name/iprdisclosurestatename/posted/": "posted",
+		"/api/v1/doc/document/rfc3261/":               "rfc3261",
+		"/api/v1/doc/document/rfc9000/?format=json":   "rfc9000",
+		"/api/v1/doc/document/rfc9000/#frag":          "rfc9000",
+		"/api/v1/doc/document/rfc9000?format=json":    "rfc9000",
+		"rfc9000": "rfc9000",
+		"":        "",
+	}
+	for in, want := range cases {
+		if got := lastPathSegment(in); got != want {
+			t.Errorf("lastPathSegment(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // TestFetchIPR_ReplacedDraftsErrorPropagates is a regression test: a
 // failed replaces lookup used to be silently ignored, returning -- and
 // caching for an hour -- an incomplete disclosure list. It must now fail

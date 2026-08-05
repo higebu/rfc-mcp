@@ -41,6 +41,11 @@ func init() {
 // so tests can shrink it and keep retry tests fast.
 var retryBaseDelay = time.Second
 
+// fallbackClient serves callers that pass a nil *http.Client. Unlike
+// http.DefaultClient it carries a timeout, so a stalled Datatracker or
+// archive connection can't hang a request forever.
+var fallbackClient = &http.Client{Timeout: 30 * time.Second}
+
 // httpGetWithRetry performs an HTTP GET with up to 3 attempts and
 // exponential backoff (2x, 4x retryBaseDelay) between them, mirroring
 // ingest/pipeline's retry shape. A 404 response returns an error wrapping
@@ -48,7 +53,7 @@ var retryBaseDelay = time.Second
 // exist" response.
 func httpGetWithRetry(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 	if client == nil {
-		client = http.DefaultClient
+		client = fallbackClient
 	}
 
 	var lastErr error
