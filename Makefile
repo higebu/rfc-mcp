@@ -1,4 +1,4 @@
-.PHONY: build install import import-dir build-db download update test db-info clean
+.PHONY: build install import import-dir check-import-file check-import-dir build-db download update test db-info clean
 
 DB_PATH ?= data/rfc.db
 BIN_DIR ?= bin
@@ -17,29 +17,36 @@ build:
 install:
 	go install ./cmd/rfc-mcp
 
-# Import a single RFC .txt file (usage: make import FILE=path/to/rfcNNNN.txt)
-import: build
+# Argument guards run as prerequisites listed before `build`, so a missing
+# FILE/DIR fails fast without compiling first (prerequisites run left to
+# right in non-parallel make, the default here).
+check-import-file:
 	@test -n "$(FILE)" || { echo "FILE required (usage: make import FILE=path/to/rfcNNNN.txt)"; exit 1; }
-	./$(BIN_DIR)/rfc-mcp import --db "$(DB_PATH)" "$(FILE)"
+
+check-import-dir:
+	@test -n "$(DIR)" || { echo "DIR required (usage: make import-dir DIR=raw)"; exit 1; }
+
+# Import a single RFC .txt file (usage: make import FILE=path/to/rfcNNNN.txt)
+import: check-import-file build
+	"./$(BIN_DIR)/rfc-mcp" import --db "$(DB_PATH)" "$(FILE)"
 
 # Import all RFC .txt files in a directory (usage: make import-dir DIR=raw)
-import-dir: build
-	@test -n "$(DIR)" || { echo "DIR required (usage: make import-dir DIR=raw)"; exit 1; }
-	./$(BIN_DIR)/rfc-mcp import-dir --db "$(DB_PATH)" "$(DIR)"
+import-dir: check-import-dir build
+	"./$(BIN_DIR)/rfc-mcp" import-dir --db "$(DB_PATH)" "$(DIR)"
 
 # Download + import in one step (recommended). Builds the full RFC corpus by
 # default (~8 min, ~865 MB); pass FROM/TO to restrict to a numeric range.
 build-db: build
-	./$(BIN_DIR)/rfc-mcp build $(from_flag) $(to_flag) --db "$(DB_PATH)"
+	"./$(BIN_DIR)/rfc-mcp" build $(from_flag) $(to_flag) --db "$(DB_PATH)"
 
 # Download RFC .txt bodies only, no database import.
 download: build
-	./$(BIN_DIR)/rfc-mcp download $(from_flag) $(to_flag)
+	"./$(BIN_DIR)/rfc-mcp" download $(from_flag) $(to_flag)
 
 # Refresh an existing database: fetch newly issued RFCs and refresh
 # metadata/errata for all of them.
 update: build
-	./$(BIN_DIR)/rfc-mcp update --db "$(DB_PATH)"
+	"./$(BIN_DIR)/rfc-mcp" update --db "$(DB_PATH)"
 
 # Show database info. built_at/rfc_index_fetched_at are run as separate
 # sqlite3 invocations (rather than one multi-statement command) so a
