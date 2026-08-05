@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/higebu/rfc-mcp/db"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // rfcRangeHint returns a suffix naming the highest currently issued RFC
@@ -30,21 +31,24 @@ func rfcRangeHint(d *db.DB) string {
 	return fmt.Sprintf(" (valid RFC numbers range from 1 to %d%s)", maxNumber, built)
 }
 
-// rfcNotFoundError builds a helpful error message for an RFC number that
-// produced no content, distinguishing between: the number was never
+// rfcNotFoundResult builds the full handler return value for an RFC number
+// that produced no content, distinguishing between: the number was never
 // allocated an RFC row at all (unknown), the row exists but marks a number
 // that was allocated but never issued, and the row exists and was issued but
-// has no parsed sections (a parsing gap rather than a bad request).
-func rfcNotFoundError(d *db.DB, rfc int) string {
+// has no parsed sections (a parsing gap rather than a bad request). A real
+// database error during the lookup (anything other than sql.ErrNoRows,
+// which GetRFCMetadata wraps with %w) is reported generically via
+// internalError rather than leaking its detail to the client.
+func rfcNotFoundResult(d *db.DB, rfc int) (*mcp.CallToolResult, any, error) {
 	meta, err := d.GetRFCMetadata(rfc)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Sprintf("RFC %d not found%s", rfc, rfcRangeHint(d))
+			return errorResult(fmt.Sprintf("RFC %d not found%s", rfc, rfcRangeHint(d))), nil, nil
 		}
-		return fmt.Sprintf("failed to look up RFC %d: %v", rfc, err)
+		return internalError(fmt.Sprintf("failed to look up RFC %d", rfc), err)
 	}
 	if meta.NotIssued {
-		return fmt.Sprintf("RFC %d was never issued", rfc)
+		return errorResult(fmt.Sprintf("RFC %d was never issued", rfc)), nil, nil
 	}
-	return fmt.Sprintf("RFC %d exists but has no parsed sections available", rfc)
+	return errorResult(fmt.Sprintf("RFC %d exists but has no parsed sections available", rfc)), nil, nil
 }

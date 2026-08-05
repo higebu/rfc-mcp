@@ -69,16 +69,25 @@ func draftLabel(name, rev string) string {
 	return name + "-" + rev
 }
 
+// wrapDraftFetchError wraps a Datatracker/archive fetch failure with the
+// client-facing wording draft tools use, while preserving the error chain
+// so errors.Is(err, drafts.ErrNotFound) still works on the result. An
+// unknown draft/revision already names the attempted URL via
+// drafts.ErrNotFound and is passed through unchanged.
+func wrapDraftFetchError(label string, err error) error {
+	if errors.Is(err, drafts.ErrNotFound) {
+		// The error already reads "draft not found: <attempted URL>".
+		return err
+	}
+	return fmt.Errorf("failed to fetch draft %s: %w", label, err)
+}
+
 // draftFetchError formats a Datatracker/archive fetch failure for a draft
 // tool's error result, distinguishing an unknown draft/revision (which
 // already names the attempted URL, via drafts.ErrNotFound) from any other
 // network or server failure.
 func draftFetchError(label string, err error) string {
-	if errors.Is(err, drafts.ErrNotFound) {
-		// The error already reads "draft not found: <attempted URL>".
-		return err.Error()
-	}
-	return fmt.Sprintf("failed to fetch draft %s: %v", label, err)
+	return wrapDraftFetchError(label, err).Error()
 }
 
 // fetchAndParseDraft resolves name/revision, fetches the draft's plain-
@@ -88,13 +97,13 @@ func draftFetchError(label string, err error) string {
 func fetchAndParseDraft(ctx context.Context, client *http.Client, name, revision string) (label string, sections []db.Section, err error) {
 	base, rev, err := resolveDraftRevision(ctx, client, name, revision)
 	if err != nil {
-		return "", nil, errors.New(draftFetchError(base, err))
+		return "", nil, wrapDraftFetchError(base, err)
 	}
 	label = draftLabel(base, rev)
 
 	body, err := drafts.FetchText(ctx, client, base, rev)
 	if err != nil {
-		return "", nil, errors.New(draftFetchError(label, err))
+		return "", nil, wrapDraftFetchError(label, err)
 	}
 
 	parsed, err := rfctxt.ParseRFCText(body, 0, label)

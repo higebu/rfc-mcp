@@ -1,7 +1,9 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/higebu/rfc-mcp/db"
@@ -34,6 +36,21 @@ func errorResult(text string) *mcp.CallToolResult {
 		Content: []mcp.Content{&mcp.TextContent{Text: text}},
 		IsError: true,
 	}
+}
+
+// internalError is the full handler return value for an unexpected
+// internal failure (database error, marshalling error): the underlying
+// error is logged server-side, while the client sees only the generic
+// clientMsg. The Go error handed back to the framework is deliberately
+// built from clientMsg alone -- the SDK's typed-handler wrapper copies a
+// non-nil error's text into client-visible content (discarding the
+// handler's own result), so wrapping err itself would leak internal
+// detail to the client. Returning a non-nil error still marks the call
+// failed for the framework and exposes it to server middleware via
+// CallToolResult.GetError.
+func internalError(clientMsg string, err error) (*mcp.CallToolResult, any, error) {
+	log.Printf("%s: %v", clientMsg, err)
+	return errorResult(clientMsg), nil, errors.New(clientMsg)
 }
 
 func paginateText(content string, offset, maxLines, maxChars int) *mcp.CallToolResult {

@@ -65,7 +65,7 @@ func HandleGetIPR(client *http.Client) func(ctx context.Context, req *mcp.CallTo
 
 		data, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to marshal: %v", err)), nil, nil
+			return internalError("failed to marshal result", err)
 		}
 
 		return textResult(string(data)), nil, nil

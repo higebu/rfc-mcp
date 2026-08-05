@@ -41,13 +41,20 @@ func HandleGetSection(d *db.DB) func(ctx context.Context, req *mcp.CallToolReque
 
 		sections, err := d.GetSection(input.RFC, input.SectionNumber, input.IncludeSubsections)
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to get section: %v", err)), nil, nil
+			return internalError(fmt.Sprintf("failed to get section %q of RFC %d", input.SectionNumber, input.RFC), err)
 		}
 
 		if len(sections) == 0 {
 			// Distinguish "this RFC has other sections, just not this one"
 			// from "this RFC has no content at all" (unknown/not-issued/unparsed).
-			if toc, tocErr := d.GetTOC(input.RFC); tocErr == nil && len(toc) > 0 {
+			// GetTOC/GetChildren/GetDescendantsByPrefix signal not-found as
+			// an empty slice with a nil error, so any non-nil error from
+			// them is a real database failure, not a missing RFC/section.
+			toc, tocErr := d.GetTOC(input.RFC)
+			if tocErr != nil {
+				return internalError(fmt.Sprintf("failed to look up RFC %d", input.RFC), tocErr)
+			}
+			if len(toc) > 0 {
 				// The queried number has no heading of its own, but something
 				// underneath it does -- most commonly a caller guessing at an
 				// intermediate number that the source document itself never
@@ -66,12 +73,15 @@ func HandleGetSection(d *db.DB) func(ctx context.Context, req *mcp.CallToolReque
 					viaParentLink = false
 					children, childErr = d.GetDescendantsByPrefix(input.RFC, input.SectionNumber)
 				}
-				if childErr == nil && len(children) > 0 {
+				if childErr != nil {
+					return internalError(fmt.Sprintf("failed to get section %q of RFC %d", input.SectionNumber, input.RFC), childErr)
+				}
+				if len(children) > 0 {
 					return textResult(missingSectionGuidance(fmt.Sprintf("RFC %d", input.RFC), input.SectionNumber, children, viaParentLink)), nil, nil
 				}
 				return errorResult(fmt.Sprintf("section %q not found in RFC %d", input.SectionNumber, input.RFC)), nil, nil
 			}
-			return errorResult(rfcNotFoundError(d, input.RFC)), nil, nil
+			return rfcNotFoundResult(d, input.RFC)
 		}
 
 		// A title-only parent (empty Content, body text living entirely in
@@ -83,7 +93,7 @@ func HandleGetSection(d *db.DB) func(ctx context.Context, req *mcp.CallToolReque
 		if !input.IncludeSubsections && strings.TrimSpace(sections[0].Content) == "" {
 			children, err := d.GetChildren(input.RFC, sections[0].Number)
 			if err != nil {
-				return errorResult(fmt.Sprintf("failed to get section: %v", err)), nil, nil
+				return internalError(fmt.Sprintf("failed to get section %q of RFC %d", input.SectionNumber, input.RFC), err)
 			}
 			if len(children) > 0 {
 				return textResult(emptyParentGuidance(sections[0], children)), nil, nil

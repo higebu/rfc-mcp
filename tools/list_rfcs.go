@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/higebu/rfc-mcp/db"
@@ -33,7 +32,7 @@ func HandleListRFCs(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest
 
 		result, err := d.ListRFCs(input.Query, input.Stream, status, input.WG, input.Limit, input.Offset)
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to list rfcs: %v", err)), nil, nil
+			return internalError("failed to list RFCs", err)
 		}
 		// The db layer stores/returns status verbatim (all-caps); title-case
 		// it for display here, same as get_metadata.
@@ -43,7 +42,7 @@ func HandleListRFCs(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest
 
 		data, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to marshal: %v", err)), nil, nil
+			return internalError("failed to marshal result", err)
 		}
 
 		return textResult(string(data)), nil, nil

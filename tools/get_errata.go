@@ -39,7 +39,7 @@ func HandleGetErrata(d *db.DB) func(ctx context.Context, req *mcp.CallToolReques
 			if errors.Is(err, sql.ErrNoRows) {
 				return errorResult(fmt.Sprintf("RFC %d not found%s", input.RFC, rfcRangeHint(d))), nil, nil
 			}
-			return errorResult(fmt.Sprintf("failed to look up RFC %d: %v", input.RFC, err)), nil, nil
+			return internalError(fmt.Sprintf("failed to look up RFC %d", input.RFC), err)
 		}
 		if rfc.NotIssued {
 			return errorResult(fmt.Sprintf("RFC %d was never issued", input.RFC)), nil, nil
@@ -47,7 +47,7 @@ func HandleGetErrata(d *db.DB) func(ctx context.Context, req *mcp.CallToolReques
 
 		items, err := d.GetErrataByRFC(input.RFC)
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to get errata: %v", err)), nil, nil
+			return internalError(fmt.Sprintf("failed to get errata for RFC %d", input.RFC), err)
 		}
 
 		var filtered []db.Errata
@@ -70,7 +70,7 @@ func HandleGetErrata(d *db.DB) func(ctx context.Context, req *mcp.CallToolReques
 
 		data, err := json.MarshalIndent(filtered, "", "  ")
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to marshal: %v", err)), nil, nil
+			return internalError("failed to marshal result", err)
 		}
 
 		return textResult(string(data)), nil, nil

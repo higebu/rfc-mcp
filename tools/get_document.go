@@ -29,10 +29,10 @@ func HandleGetDocument(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequ
 
 		doc, err := d.GetDocument(input.RFC)
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to get document: %v", err)), nil, nil
+			return internalError(fmt.Sprintf("failed to get document for RFC %d", input.RFC), err)
 		}
 		if doc == "" {
-			return errorResult(rfcNotFoundError(d, input.RFC)), nil, nil
+			return rfcNotFoundResult(d, input.RFC)
 		}
 
 		return paginateText(doc, input.Offset, input.MaxLines, input.MaxChars), nil, nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/higebu/rfc-mcp/db"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -52,12 +53,24 @@ func HandleSearch(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, 
 
 		results, err := d.Search(input.Query, rfcs, limit)
 		if err != nil {
-			return errorResult(fmt.Sprintf("search failed: %v", err)), nil, nil
+			// The db layer labels the MATCH query's failure "invalid search
+			// query", but that wrapping also covers infrastructure failures
+			// (e.g. a closed database), so additionally require SQLite's
+			// "SQL logic error" marker (SQLITE_ERROR, which is what a bad
+			// FTS5 expression compiles to) before showing the detail: an
+			// FTS5 syntax problem is the caller's to fix and they need the
+			// message verbatim, while an internal database failure must not
+			// leak its detail.
+			msg := err.Error()
+			if strings.Contains(msg, "invalid search query") && strings.Contains(msg, "SQL logic error") {
+				return errorResult(fmt.Sprintf("search failed: %v", err)), nil, nil
+			}
+			return internalError("search failed", err)
 		}
 
 		data, err := json.MarshalIndent(results, "", "  ")
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to marshal: %v", err)), nil, nil
+			return internalError("failed to marshal result", err)
 		}
 
 		return textResult(string(data)), nil, nil

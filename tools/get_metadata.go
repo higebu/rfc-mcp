@@ -68,7 +68,7 @@ func HandleGetMetadata(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequ
 			if errors.Is(err, sql.ErrNoRows) {
 				return errorResult(fmt.Sprintf("RFC %d not found%s", input.RFC, rfcRangeHint(d))), nil, nil
 			}
-			return errorResult(fmt.Sprintf("failed to get metadata: %v", err)), nil, nil
+			return internalError(fmt.Sprintf("failed to get metadata for RFC %d", input.RFC), err)
 		}
 		if rfc.NotIssued {
 			return errorResult(fmt.Sprintf("RFC %d was never issued", input.RFC)), nil, nil
@@ -76,7 +76,7 @@ func HandleGetMetadata(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequ
 
 		errataItems, err := d.GetErrataByRFC(input.RFC)
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to get errata: %v", err)), nil, nil
+			return internalError(fmt.Sprintf("failed to get errata for RFC %d", input.RFC), err)
 		}
 		var errata []errataSummary
 		for _, e := range errataItems {
@@ -108,7 +108,7 @@ func HandleGetMetadata(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequ
 
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to marshal: %v", err)), nil, nil
+			return internalError("failed to marshal result", err)
 		}
 
 		return textResult(string(data)), nil, nil
