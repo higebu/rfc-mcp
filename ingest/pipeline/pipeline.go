@@ -3,6 +3,8 @@ package pipeline
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -678,7 +680,10 @@ func (p *Pipeline) ImportFile(path string) error {
 
 func (p *Pipeline) importRaw(number int, raw []byte) error {
 	rfc, err := p.DB.GetRFCMetadata(number)
-	if err != nil {
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// Genuinely not in the database yet (no rfc-index.xml row loaded):
+		// fabricate minimal metadata from the body itself.
 		title := extractTitleFromHeader(raw)
 		if title == "" {
 			title = fmt.Sprintf("RFC %d", number)
@@ -686,6 +691,10 @@ func (p *Pipeline) importRaw(number int, raw []byte) error {
 		// HasText is true unconditionally: importRaw is only ever called with
 		// an actual RFC .txt body already in hand.
 		rfc = &db.RFC{Number: number, Title: title, HasText: true}
+	case err != nil:
+		// Any other error is a real database failure (closed DB, corruption,
+		// I/O); fabricating metadata here would silently mask it.
+		return fmt.Errorf("look up rfc %d metadata: %w", number, err)
 	}
 
 	sections, parseErr := rfctxt.ParseRFCText(raw, number, rfc.Title)

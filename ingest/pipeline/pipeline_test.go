@@ -393,6 +393,48 @@ func TestPipeline_ImportFile_ModernHeader(t *testing.T) {
 	}
 }
 
+// TestPipeline_ImportFile_ExistingMetadataKept: when the RFC already has an
+// rfcs row (rfc-index.xml previously loaded), importRaw's sql.ErrNoRows
+// branch must NOT trigger -- the authoritative DB title wins over the
+// header-scraped one.
+func TestPipeline_ImportFile_ExistingMetadataKept(t *testing.T) {
+	d := newTestDB(t)
+	p := &Pipeline{DB: d}
+
+	if err := d.UpsertRFC(db.RFC{Number: 791, Title: "Internet Protocol (from index)", HasText: true}); err != nil {
+		t.Fatalf("UpsertRFC: %v", err)
+	}
+	if err := p.ImportFile("../rfctxt/testdata/rfc791.txt"); err != nil {
+		t.Fatalf("ImportFile: %v", err)
+	}
+
+	rfc, err := d.GetRFCMetadata(791)
+	if err != nil {
+		t.Fatalf("GetRFCMetadata(791): %v", err)
+	}
+	if rfc.Title != "Internet Protocol (from index)" {
+		t.Errorf("rfc 791 title = %q, want the pre-existing index title", rfc.Title)
+	}
+}
+
+// TestPipeline_ImportFile_DBErrorPropagated verifies issue #11: a real
+// database failure during the metadata lookup must propagate as an error,
+// not be mistaken for "RFC not in index" and papered over with fabricated
+// metadata.
+func TestPipeline_ImportFile_DBErrorPropagated(t *testing.T) {
+	d := newTestDB(t)
+	p := &Pipeline{DB: d}
+	_ = d.Close() // break the DB: GetRFCMetadata now fails with a non-ErrNoRows error
+
+	err := p.ImportFile("../rfctxt/testdata/rfc791.txt")
+	if err == nil {
+		t.Fatal("ImportFile with a broken DB: err = nil, want the lookup error propagated")
+	}
+	if !strings.Contains(err.Error(), "look up rfc 791 metadata") {
+		t.Errorf("err = %v, want the metadata lookup failure, not a fabricated-metadata insert error", err)
+	}
+}
+
 func TestPipeline_ImportDir(t *testing.T) {
 	d := newTestDB(t)
 	p := &Pipeline{DB: d}
