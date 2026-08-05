@@ -99,12 +99,42 @@ func (p *Pipeline) fetchCached(ctx context.Context, cacheKey, path string) ([]by
 	return data, fetchedAt, nil
 }
 
+// parseIndex parses rfc-index.xml bytes, tolerating individually malformed
+// entries: rfcindex.Parse skips those and reports them via a joined non-nil
+// error alongside the entries it did decode (see its doc comment). One bad
+// entry shouldn't abort a whole build/update, so a partial parse is logged
+// as a warning and its entries used as-is; a parse yielding zero entries
+// means the stream itself is broken and stays fatal.
+func parseIndex(data []byte) ([]db.RFC, error) {
+	rfcs, err := rfcindex.Parse(bytes.NewReader(data))
+	if err != nil {
+		if len(rfcs) == 0 {
+			return nil, err
+		}
+		log.Printf("warning: rfc-index.xml: proceeding with %d entries, some skipped: %v", len(rfcs), err)
+	}
+	return rfcs, nil
+}
+
+// parseErrata is parseIndex's counterpart for errata.json, with the same
+// partial-parse-is-a-warning / empty-parse-is-fatal contract.
+func parseErrata(data []byte) ([]db.Errata, error) {
+	items, err := errata.Parse(bytes.NewReader(data))
+	if err != nil {
+		if len(items) == 0 {
+			return nil, err
+		}
+		log.Printf("warning: errata.json: proceeding with %d entries, some skipped: %v", len(items), err)
+	}
+	return items, nil
+}
+
 func (p *Pipeline) loadIndex(ctx context.Context) ([]db.RFC, time.Time, error) {
 	data, fetchedAt, err := p.fetchCached(ctx, indexCacheKey, "/rfc-index.xml")
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	rfcs, err := rfcindex.Parse(bytes.NewReader(data))
+	rfcs, err := parseIndex(data)
 	return rfcs, fetchedAt, err
 }
 
@@ -113,7 +143,7 @@ func (p *Pipeline) loadErrata(ctx context.Context) ([]db.Errata, error) {
 	if err != nil {
 		return nil, err
 	}
-	return errata.Parse(bytes.NewReader(data))
+	return parseErrata(data)
 }
 
 // fetchLive is fetchCached's counterpart for RunUpdate: it always performs a
@@ -138,7 +168,7 @@ func (p *Pipeline) loadIndexLive(ctx context.Context) ([]db.RFC, time.Time, erro
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	rfcs, err := rfcindex.Parse(bytes.NewReader(data))
+	rfcs, err := parseIndex(data)
 	return rfcs, fetchedAt, err
 }
 
@@ -147,7 +177,7 @@ func (p *Pipeline) loadErrataLive(ctx context.Context) ([]db.Errata, error) {
 	if err != nil {
 		return nil, err
 	}
-	return errata.Parse(bytes.NewReader(data))
+	return parseErrata(data)
 }
 
 // issuedNumbersInRange returns the sorted, issued (non-not-issued) RFC
@@ -391,7 +421,7 @@ func (p *Pipeline) Download(ctx context.Context, from, to int) error {
 	if err != nil {
 		return fmt.Errorf("load rfc-index.xml: %w", err)
 	}
-	rfcs, err := rfcindex.Parse(bytes.NewReader(data))
+	rfcs, err := parseIndex(data)
 	if err != nil {
 		return fmt.Errorf("parse rfc-index.xml: %w", err)
 	}

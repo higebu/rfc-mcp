@@ -210,6 +210,110 @@ func TestPipeline_Run_SkipsTextlessRFCs(t *testing.T) {
 	}
 }
 
+// TestPipeline_Run_ToleratesMalformedEntries verifies the parse contract of
+// issue #6: one malformed rfc-index.xml or errata.json entry among good ones
+// must not abort the build -- the parsers return the good rows alongside a
+// joined error, and the pipeline logs it as a warning and proceeds.
+func TestPipeline_Run_ToleratesMalformedEntries(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	const indexXML = `<?xml version="1.0" encoding="UTF-8"?>
+<rfc-index>
+  <rfc-entry>
+    <doc-id>BOGUS123</doc-id>
+    <title>Broken entry</title>
+  </rfc-entry>
+  <rfc-entry>
+    <doc-id>RFC9293</doc-id>
+    <title>Transmission Control Protocol (TCP)</title>
+    <date><month>August</month><year>2022</year></date>
+    <format><file-format>TXT</file-format></format>
+    <current-status>INTERNET STANDARD</current-status>
+  </rfc-entry>
+</rfc-index>`
+	const errataJSON = `[
+  {"errata_id": "not-a-number", "doc-id": "RFC9293", "errata_status_code": "Verified"},
+  {"errata_id": "42", "doc-id": "RFC9293", "errata_status_code": "Verified",
+   "errata_type_code": "Technical", "section": "3.1", "orig_text": "a",
+   "correct_text": "b", "notes": "", "submit_date": "2023-01-01",
+   "submitter_name": "X", "verifier_name": null, "update_date": null}
+]`
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rfc-index.xml", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(indexXML))
+	})
+	mux.HandleFunc("/errata.json", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(errataJSON))
+	})
+	mux.HandleFunc("/rfc/rfc9293.txt", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "../rfctxt/testdata/rfc9293.txt")
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	d := newTestDB(t)
+	p := &Pipeline{DB: d, Client: ts.Client(), Workers: 2, RawDir: t.TempDir(), BaseURL: ts.URL}
+	if err := p.Run(context.Background(), 9293, 9293); err != nil {
+		t.Fatalf("Run with one malformed index/errata entry: %v, want nil (proceed with good rows)", err)
+	}
+
+	rfc, err := d.GetRFCMetadata(9293)
+	if err != nil {
+		t.Fatalf("GetRFCMetadata(9293): %v", err)
+	}
+	if rfc.Title != "Transmission Control Protocol (TCP)" {
+		t.Errorf("rfc 9293 title = %q", rfc.Title)
+	}
+	items, err := d.GetErrataByRFC(9293)
+	if err != nil {
+		t.Fatalf("GetErrataByRFC(9293): %v", err)
+	}
+	if len(items) != 1 {
+		t.Errorf("errata count = %d, want 1 (good entry kept, malformed one skipped)", len(items))
+	}
+}
+
+// TestPipeline_Run_BrokenIndexFatal: a truly broken rfc-index.xml stream
+// (zero parseable entries) must still abort the build.
+func TestPipeline_Run_BrokenIndexFatal(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rfc-index.xml", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<rfc-index><rfc-entry><doc-id>RFC1</doc-id>`))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	d := newTestDB(t)
+	p := &Pipeline{DB: d, Client: ts.Client(), Workers: 2, RawDir: t.TempDir(), BaseURL: ts.URL}
+	if err := p.Run(context.Background(), 0, 0); err == nil {
+		t.Fatal("Run with a truncated rfc-index.xml: err = nil, want fatal")
+	}
+}
+
+// TestPipeline_Run_BrokenErrataFatal: same for a broken errata.json stream.
+func TestPipeline_Run_BrokenErrataFatal(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rfc-index.xml", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "../rfcindex/testdata/rfc-index-sample.xml")
+	})
+	mux.HandleFunc("/errata.json", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"not": "an array"}`))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	d := newTestDB(t)
+	p := &Pipeline{DB: d, Client: ts.Client(), Workers: 2, RawDir: t.TempDir(), BaseURL: ts.URL}
+	if err := p.Run(context.Background(), 0, 0); err == nil {
+		t.Fatal("Run with a non-array errata.json: err = nil, want fatal")
+	}
+}
+
 func TestPipeline_ImportFile(t *testing.T) {
 	d := newTestDB(t)
 	p := &Pipeline{DB: d}
