@@ -25,9 +25,19 @@ RUN FROM_FLAG="" \
     && if [ -n "${FROM_RFC}" ]; then FROM_FLAG="--from ${FROM_RFC}"; fi \
     && if [ -n "${TO_RFC}" ]; then TO_FLAG="--to ${TO_RFC}"; fi \
     && /rfc-mcp build ${FROM_FLAG} ${TO_FLAG} --db /rfc.db
+# Empty directory to copy into the scratch image as the runtime cache dir
+# (scratch has no mkdir). /var/cache/rfc-mcp is unused during this build
+# (HOME=/root here), so it stays empty.
+RUN mkdir -p /var/cache/rfc-mcp
 
 # 3) Final image: just the binary, the baked-in database, and CA certs.
 FROM scratch
+# scratch sets neither HOME nor XDG_CACHE_HOME, so cache-directory resolution
+# fails and the on-demand Internet-Draft cache is silently disabled. Point it
+# at a directory that exists in the image (the process runs as root, so it is
+# writable).
+ENV XDG_CACHE_HOME=/var/cache/rfc-mcp
+COPY --from=db-builder /var/cache/rfc-mcp /var/cache/rfc-mcp
 COPY --from=db-builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=go-builder /rfc-mcp /rfc-mcp
 COPY --from=db-builder /rfc.db /rfc.db
