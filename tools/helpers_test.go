@@ -27,6 +27,21 @@ func TestPaginateText_MaxIntOffsetAndMaxLines(t *testing.T) {
 	}
 }
 
+// TestPaginateText_ZeroMaxLinesUsesDefault pins the behavior the max_lines
+// schema text documents: 0 (indistinguishable from omitted with int +
+// omitempty) means the default page size, not "all lines".
+func TestPaginateText_ZeroMaxLinesUsesDefault(t *testing.T) {
+	content := strings.TrimSuffix(strings.Repeat("x\n", 500), "\n")
+	result := paginateText(content, 0, 0, 0)
+	text := getTextContent(result)
+	if !strings.Contains(text, "[Lines 1-200 of 500]") {
+		t.Errorf("expected default 200-line page, got header: %q", strings.SplitN(text, "\n", 2)[0])
+	}
+	if !strings.Contains(text, "[Truncated. Use offset=200 to continue]") {
+		t.Errorf("expected truncation notice at line 200, got: %q", text[len(text)-80:])
+	}
+}
+
 func TestPaginateText_NegativeInputsUseDefaults(t *testing.T) {
 	result := paginateText("line1\nline2\nline3", -5, -5, -5)
 	text := getTextContent(result)
