@@ -22,12 +22,28 @@ type Errata struct {
 // existing row and bulk-inserts items in a single transaction. errata.json is
 // republished in full on every IETF update, so an incremental upsert would
 // leave stale rows behind once an erratum is withdrawn.
+//
+// As a safety net, an empty items set is refused with an error when the
+// table currently holds rows: a syntactically valid but empty errata.json
+// (truncated download, upstream outage) must not silently wipe thousands of
+// previously stored errata. Empty-over-empty remains a no-op success.
 func (d *DB) ReplaceAllErrata(items []Errata) error {
 	tx, err := d.conn.Begin()
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback() // no-op after Commit per database/sql docs
+
+	if len(items) == 0 {
+		var existing int
+		if err := tx.QueryRow("SELECT COUNT(*) FROM errata").Scan(&existing); err != nil {
+			return fmt.Errorf("count errata: %w", err)
+		}
+		if existing > 0 {
+			return fmt.Errorf("refusing to replace %d stored errata with an empty set: errata.json is likely truncated or empty upstream", existing)
+		}
+		return nil
+	}
 
 	if _, err := tx.Exec("DELETE FROM errata"); err != nil {
 		return fmt.Errorf("delete errata: %w", err)
