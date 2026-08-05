@@ -140,6 +140,21 @@ func TestFetchMetadata_CacheHit(t *testing.T) {
 	}
 }
 
+func TestFetchMetadata_RejectsInvalidName(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("no request should be made for an invalid draft name")
+	}))
+	defer ts.Close()
+	withTestRoots(t, ts.URL)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	for _, name := range []string{"../../etc/passwd", "rfc9000", "draft-Foo Bar"} {
+		if _, err := FetchMetadata(context.Background(), ts.Client(), name); err == nil {
+			t.Errorf("FetchMetadata(%q) = nil error, want a validation error", name)
+		}
+	}
+}
+
 func TestFetchMetadata_NotFound(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/doc/document/draft-does-not-exist/", func(w http.ResponseWriter, r *http.Request) {

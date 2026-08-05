@@ -41,6 +41,11 @@ func init() {
 // so tests can shrink it and keep retry tests fast.
 var retryBaseDelay = time.Second
 
+// fallbackClient serves callers that pass a nil *http.Client. Unlike
+// http.DefaultClient it carries a timeout, so a stalled Datatracker or
+// archive connection can't hang a request forever.
+var fallbackClient = &http.Client{Timeout: 30 * time.Second}
+
 // httpGetWithRetry performs an HTTP GET with up to 3 attempts and
 // exponential backoff (2x, 4x retryBaseDelay) between them, mirroring
 // ingest/pipeline's retry shape. A 404 response returns an error wrapping
@@ -48,7 +53,7 @@ var retryBaseDelay = time.Second
 // exist" response.
 func httpGetWithRetry(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 	if client == nil {
-		client = http.DefaultClient
+		client = fallbackClient
 	}
 
 	var lastErr error
@@ -97,10 +102,18 @@ func httpGetOnce(ctx context.Context, client *http.Client, url string) ([]byte, 
 		return nil, err
 	}
 
-	// Detect truncation: if we can read one more byte, the response exceeded the cap.
+	// Detect truncation: if we can read one more byte, the response
+	// exceeded the cap. A clean io.EOF (or a benign zero-byte read) means
+	// the body was complete; any other error means the body may be
+	// incomplete, so it must surface as a fetch failure rather than be
+	// silently swallowed.
 	var extra [1]byte
-	if n, _ := resp.Body.Read(extra[:]); n > 0 {
+	n, probeErr := resp.Body.Read(extra[:])
+	if n > 0 {
 		return nil, fmt.Errorf("%s exceeds maximum size of %d MB", url, maxFetchSize>>20)
+	}
+	if probeErr != nil && !errors.Is(probeErr, io.EOF) {
+		return nil, fmt.Errorf("read %s: %w", url, probeErr)
 	}
 	return data, nil
 }

@@ -7,6 +7,8 @@
 // forever (see cache.go).
 package drafts
 
+import "sync"
+
 // defaultDatatrackerRoot and defaultArchiveRoot are live-verified
 // 2026-07-13:
 //   - The Datatracker document API takes the base draft name (no revision
@@ -29,16 +31,47 @@ const (
 	defaultArchiveRoot     = "https://www.ietf.org/archive/id"
 )
 
-// DatatrackerRoot and ArchiveRoot are exported package-level vars (rather
+// The Datatracker/archive base URLs live in package-level state (rather
 // than function parameters, which would need threading through every
 // exported function here and every tools/get_draft_*.go caller) so tests
 // -- including tools package tests, which only see this package's
-// exported surface -- can redirect them to an httptest.Server, mirroring
-// ingest/pipeline's Pipeline.BaseURL override.
+// exported surface -- can redirect them to an httptest.Server via
+// SetRoots, mirroring ingest/pipeline's Pipeline.BaseURL override. Access
+// goes through rootsMu so a test rewriting the roots can never race a
+// concurrent fetch reading them.
 var (
-	DatatrackerRoot = defaultDatatrackerRoot
-	ArchiveRoot     = defaultArchiveRoot
+	rootsMu         sync.RWMutex
+	datatrackerRoot = defaultDatatrackerRoot
+	archiveRoot     = defaultArchiveRoot
 )
+
+// DatatrackerRoot returns the base URL Datatracker API requests are built
+// against.
+func DatatrackerRoot() string {
+	rootsMu.RLock()
+	defer rootsMu.RUnlock()
+	return datatrackerRoot
+}
+
+// ArchiveRoot returns the base URL draft plain-text bodies are fetched
+// from.
+func ArchiveRoot() string {
+	rootsMu.RLock()
+	defer rootsMu.RUnlock()
+	return archiveRoot
+}
+
+// SetRoots replaces both base URLs and returns a func that restores the
+// previous values. It exists for tests; production code never changes the
+// defaults.
+func SetRoots(datatracker, archive string) (restore func()) {
+	rootsMu.Lock()
+	prevDT, prevArchive := datatrackerRoot, archiveRoot
+	datatrackerRoot = datatracker
+	archiveRoot = archive
+	rootsMu.Unlock()
+	return func() { SetRoots(prevDT, prevArchive) }
+}
 
 // rawDocument mirrors the fields this package uses from the Datatracker's
 // document resource, shared by both the search list endpoint's "objects"
@@ -61,6 +94,13 @@ type rawDocument struct {
 // became_rfc lookup (an unconditional per-result lookup would be
 // wasteful: the vast majority of search/metadata calls are for drafts
 // that never reach this state).
+//
+// This ID is an external dependency on the Datatracker's database: it is
+// not defined by any IETF spec, and if the Datatracker ever renumbered
+// its state table, published drafts would silently stop resolving to
+// their RFC numbers. TestDraftRFCStateContract pins the assumed ID and
+// the state-URI shape it is matched against, so any deliberate change
+// here must update that contract in one visible place.
 const draftRFCStateID = "3"
 
 // hasState reports whether states (a list of Datatracker resource URIs

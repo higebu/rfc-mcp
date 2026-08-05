@@ -12,8 +12,8 @@ import (
 	"github.com/higebu/rfc-mcp/ingest/drafts"
 )
 
-// redirectDraftsRoots points ingest/drafts' package-level DatatrackerRoot/
-// ArchiveRoot vars at url for the duration of the test (they're exported
+// redirectDraftsRoots points ingest/drafts' Datatracker/archive roots at
+// url for the duration of the test (drafts.SetRoots is exported
 // specifically so callers outside ingest/drafts, like this package's
 // tests, can redirect them -- see that package's doc comment), and
 // returns a restore func. It also isolates the on-disk draft cache in a
@@ -22,13 +22,7 @@ import (
 func redirectDraftsRoots(t *testing.T, url string) func() {
 	t.Helper()
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	origDT, origArchive := drafts.DatatrackerRoot, drafts.ArchiveRoot
-	drafts.DatatrackerRoot = url
-	drafts.ArchiveRoot = url
-	return func() {
-		drafts.DatatrackerRoot = origDT
-		drafts.ArchiveRoot = origArchive
-	}
+	return drafts.SetRoots(url, url)
 }
 
 // draftTestBody is a small, real-shaped draft plain-text body: an
@@ -179,6 +173,34 @@ func TestHandleSearchDrafts(t *testing.T) {
 		}
 		if strings.Contains(gotQuery, "states__slug=active") {
 			t.Errorf("query = %q, want states__slug dropped when include_expired", gotQuery)
+		}
+	})
+
+	t.Run("negative offset and limit are clamped", func(t *testing.T) {
+		var gotQuery string
+		mux := http.NewServeMux()
+		mux.HandleFunc("/api/v1/doc/document/", func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.RawQuery
+			_, _ = w.Write([]byte(`{"meta": {"total_count": 0}, "objects": []}`))
+		})
+		ts2 := httptest.NewServer(mux)
+		defer ts2.Close()
+		restore2 := redirectDraftsRoots(t, ts2.URL)
+		defer restore2()
+
+		h2 := HandleSearchDrafts(ts2.Client())
+		result, _, err := h2(context.Background(), nil, SearchDraftsInput{Query: "quic", Offset: -3, Limit: -1})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if text := getTextContent(result); result.IsError {
+			t.Fatalf("unexpected tool error: %s", text)
+		}
+		if !strings.Contains(gotQuery, "offset=0") {
+			t.Errorf("query = %q, want offset=0 (negative offset clamped)", gotQuery)
+		}
+		if !strings.Contains(gotQuery, "limit=20") {
+			t.Errorf("query = %q, want limit=20 (negative limit falls back to the default)", gotQuery)
 		}
 	})
 }

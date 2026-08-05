@@ -33,13 +33,18 @@ var SearchDraftsTool = &mcp.Tool{
 
 func HandleSearchDrafts(client *http.Client) func(ctx context.Context, req *mcp.CallToolRequest, input SearchDraftsInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input SearchDraftsInput) (*mcp.CallToolResult, any, error) {
+		// Clamp negative paging values at the tool boundary: a negative
+		// offset would otherwise reach slice arithmetic downstream (a
+		// negative limit just falls back to the default there).
+		offset := max(input.Offset, 0)
+		limit := max(input.Limit, 0)
 		result, err := drafts.SearchDrafts(ctx, client, drafts.SearchParams{
 			Query:          input.Query,
 			NameContains:   input.NameContains,
 			Group:          input.Group,
 			IncludeExpired: input.IncludeExpired,
-			Limit:          input.Limit,
-			Offset:         input.Offset,
+			Limit:          limit,
+			Offset:         offset,
 		})
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to search drafts: %v", err)), nil, nil
