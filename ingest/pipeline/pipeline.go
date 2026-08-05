@@ -26,6 +26,12 @@ const (
 	indexCacheKey  = "rfc-index.xml"
 	errataCacheKey = "errata.json"
 	minConcurrency = 8
+
+	// statusDBFailed marks a processOne outcome where fetch and parse
+	// succeeded but the database write failed. Unlike FETCH_FAILED (a
+	// per-RFC, non-fatal condition), it signals a globally broken database
+	// and makes processAll -- and thus Run/RunUpdate -- return an error.
+	statusDBFailed = "DB_FAILED"
 )
 
 // DefaultConcurrency returns a sensible default worker count for the
@@ -246,13 +252,16 @@ func (p *Pipeline) Run(ctx context.Context, from, to int) error {
 	numbers, textUnavailable := issuedNumbersInRange(rfcs, from, to)
 	log.Printf("Processing %d issued RFCs with %d workers...", len(numbers), p.Workers)
 
-	stats := p.processAll(ctx, numbers)
+	stats, dbErr := p.processAll(ctx, numbers)
 	stats["TEXT_UNAVAILABLE"] = textUnavailable
 	log.Println("Pipeline complete:")
-	for _, k := range []string{"OK", "FETCH_FAILED", "PARSE_DEGRADED", "TEXT_UNAVAILABLE"} {
+	for _, k := range []string{"OK", "FETCH_FAILED", "PARSE_DEGRADED", "TEXT_UNAVAILABLE", statusDBFailed} {
 		if stats[k] > 0 {
 			log.Printf("  %s: %d", k, stats[k])
 		}
+	}
+	if dbErr != nil {
+		return fmt.Errorf("database write failure: %w", dbErr)
 	}
 	return p.recordBuildMeta(indexFetchedAt)
 }
@@ -307,13 +316,16 @@ func (p *Pipeline) RunUpdate(ctx context.Context) error {
 	}
 	log.Printf("Found %d new RFCs to fetch (of %d issued)", len(newNumbers), len(issued))
 
-	stats := p.processAll(ctx, newNumbers)
+	stats, dbErr := p.processAll(ctx, newNumbers)
 	stats["TEXT_UNAVAILABLE"] = textUnavailable
 	log.Println("Update complete:")
-	for _, k := range []string{"OK", "FETCH_FAILED", "PARSE_DEGRADED", "TEXT_UNAVAILABLE"} {
+	for _, k := range []string{"OK", "FETCH_FAILED", "PARSE_DEGRADED", "TEXT_UNAVAILABLE", statusDBFailed} {
 		if stats[k] > 0 {
 			log.Printf("  %s: %d", k, stats[k])
 		}
+	}
+	if dbErr != nil {
+		return fmt.Errorf("database write failure: %w", dbErr)
 	}
 	return p.recordBuildMeta(indexFetchedAt)
 }
@@ -339,11 +351,21 @@ func (p *Pipeline) recordBuildMeta(indexFetchedAt time.Time) error {
 // caps the connection pool to one connection, so writes are already
 // serialized there (mirrors 3gpp-mcp's Pipeline.Run, which relies on the
 // same property instead of adding a redundant mutex).
-func (p *Pipeline) processAll(ctx context.Context, numbers []int) map[string]int {
+//
+// Per-RFC fetch/parse failures are counted in stats and never returned as
+// an error. A DB write failure (statusDBFailed) is different: it means the
+// database itself is broken and every remaining write would fail too, so
+// the first one cancels the worker pool and is returned for Run/RunUpdate
+// to propagate.
+func (p *Pipeline) processAll(ctx context.Context, numbers []int) (map[string]int, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	sem := make(chan struct{}, p.Workers)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	stats := make(map[string]int)
+	var dbErr error
 	total := len(numbers)
 
 	for i, number := range numbers {
@@ -369,11 +391,15 @@ func (p *Pipeline) processAll(ctx context.Context, numbers []int) map[string]int
 			}
 			mu.Lock()
 			stats[status]++
+			if status == statusDBFailed && dbErr == nil {
+				dbErr = err
+				cancel()
+			}
 			mu.Unlock()
 		}()
 	}
 	wg.Wait()
-	return stats
+	return stats, dbErr
 }
 
 // processOne fetches, parses, and stores a single RFC's body text.
@@ -396,10 +422,10 @@ func (p *Pipeline) processOne(ctx context.Context, number int) (string, error) {
 	dbSections, refs := buildSectionsAndReferences(number, sections)
 
 	if err := p.DB.InsertRFCWithSections(rfc, dbSections); err != nil {
-		return "FETCH_FAILED", fmt.Errorf("insert rfc %d: %w", number, err)
+		return statusDBFailed, fmt.Errorf("insert rfc %d: %w", number, err)
 	}
 	if err := p.DB.InsertReferences(refs); err != nil {
-		return "FETCH_FAILED", fmt.Errorf("insert references for rfc %d: %w", number, err)
+		return statusDBFailed, fmt.Errorf("insert references for rfc %d: %w", number, err)
 	}
 
 	// ParseRFCText's Tier-3 fallback (whole body as one section) sets

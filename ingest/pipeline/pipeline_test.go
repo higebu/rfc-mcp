@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -271,6 +272,40 @@ func TestPipeline_Run_ToleratesMalformedEntries(t *testing.T) {
 	}
 	if len(items) != 1 {
 		t.Errorf("errata count = %d, want 1 (good entry kept, malformed one skipped)", len(items))
+	}
+}
+
+// TestPipeline_Run_DBWriteFailureFatal verifies issue #7: a database write
+// failure during per-RFC processing must not be demoted to a per-RFC
+// FETCH_FAILED stat -- it means the database is globally broken, so Run must
+// return a non-nil error. The database is closed from the rfc9293.txt body
+// handler, i.e. after the metadata/errata phase succeeded but before
+// processOne's InsertRFCWithSections write.
+func TestPipeline_Run_DBWriteFailureFatal(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	d := newTestDB(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rfc-index.xml", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "../rfcindex/testdata/rfc-index-sample.xml")
+	})
+	mux.HandleFunc("/errata.json", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "../errata/testdata/errata-sample.json")
+	})
+	mux.HandleFunc("/rfc/rfc9293.txt", func(w http.ResponseWriter, r *http.Request) {
+		_ = d.Close() // break the DB before the worker's insert
+		http.ServeFile(w, r, "../rfctxt/testdata/rfc9293.txt")
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	p := &Pipeline{DB: d, Client: ts.Client(), Workers: 2, RawDir: t.TempDir(), BaseURL: ts.URL}
+	err := p.Run(context.Background(), 9293, 9293)
+	if err == nil {
+		t.Fatal("Run with a failing DB write: err = nil, want a database write failure")
+	}
+	if !strings.Contains(err.Error(), "database write failure") {
+		t.Errorf("err = %v, want a wrapped database write failure", err)
 	}
 }
 
