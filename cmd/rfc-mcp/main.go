@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/higebu/rfc-mcp/db"
@@ -26,6 +27,27 @@ var version = "dev"
 const usage = `Usage: rfc-mcp <command> [options]
 Commands: serve, build, download, import, import-dir, update, completion`
 
+// defaultDBPath is the default SQLite database path shared by every
+// subcommand that takes a -db flag (serve, build, update, import, import-dir).
+const defaultDBPath = "data/rfc.db"
+
+// newHTTPServer wraps handler in an http.Server with explicit limits so a
+// client cannot hold a connection open indefinitely while trickling request
+// headers or body (slowloris). ReadTimeout bounds reading the request only
+// (headers + body), never the response, so it is safe to set. WriteTimeout is
+// deliberately left unset: MCP streamable HTTP responses can be long-lived
+// streams, and a write deadline would cut them off.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadTimeout:       60 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MiB
+	}
+}
+
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -33,10 +55,14 @@ func healthHandler(w http.ResponseWriter, _ *http.Request) {
 }
 
 func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
-	expected := []byte("Bearer " + token)
+	expected := []byte(token)
+	const scheme = "Bearer "
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := []byte(r.Header.Get("Authorization"))
-		if subtle.ConstantTimeCompare(auth, expected) != 1 {
+		// Per RFC 7235 the auth-scheme name is case-insensitive; the token
+		// itself stays case-sensitive and is compared in constant time.
+		auth := r.Header.Get("Authorization")
+		if len(auth) < len(scheme) || !strings.EqualFold(auth[:len(scheme)], scheme) ||
+			subtle.ConstantTimeCompare([]byte(auth[len(scheme):]), expected) != 1 {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -90,7 +116,7 @@ func defaultRawDir() string {
 
 func cmdBuild(args []string) {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
-	dbPath := fs.String("db", "data/rfc.db", "Output SQLite database path")
+	dbPath := fs.String("db", defaultDBPath, "Output SQLite database path")
 	workers := fs.Int("workers", pipeline.DefaultConcurrency(), "Number of parallel workers")
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP timeout")
 	from := fs.Int("from", 0, "Only process RFCs numbered >= this (0 = no lower bound)")
@@ -137,6 +163,24 @@ func removeWorkingCopy(path string) {
 	_ = os.Remove(path + "-shm")
 }
 
+// finalizeWorkingCopy makes update's working copy self-contained before it
+// is renamed over the live database: the WAL is checkpointed (TRUNCATE) into
+// the main file, the handle is closed, and only then are the -wal/-shm
+// sidecars removed. Any failure is returned before the sidecars are touched,
+// so the caller can abort with the old database still live.
+func finalizeWorkingCopy(d *db.DB, path string) error {
+	if err := d.WALCheckpointTruncate(); err != nil {
+		_ = d.Close()
+		return fmt.Errorf("checkpoint working copy: %w", err)
+	}
+	if err := d.Close(); err != nil {
+		return fmt.Errorf("close working copy: %w", err)
+	}
+	_ = os.Remove(path + "-wal")
+	_ = os.Remove(path + "-shm")
+	return nil
+}
+
 // cmdUpdate refreshes an existing database in place: it works on a VACUUM
 // INTO'd copy so the live database (which serve may be reading concurrently)
 // is never mutated mid-update, then atomically renames the copy over the
@@ -144,7 +188,7 @@ func removeWorkingCopy(path string) {
 // "refresh" means (live-fetched metadata/errata, new RFC bodies only).
 func cmdUpdate(args []string) {
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
-	dbPath := fs.String("db", "data/rfc.db", "SQLite database path")
+	dbPath := fs.String("db", defaultDBPath, "SQLite database path")
 	workers := fs.Int("workers", pipeline.DefaultConcurrency(), "Number of parallel workers")
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP timeout")
 	rawDir := fs.String("raw-dir", defaultRawDir(), "Directory to cache downloaded RFC .txt files")
@@ -196,11 +240,12 @@ func cmdUpdate(args []string) {
 		log.Fatalf("Update failed: %v", err)
 	}
 
-	// Checkpoint WAL into the main file so the renamed DB is self-contained.
-	_ = d.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
-	_ = d.Close()
-	_ = os.Remove(newPath + "-wal")
-	_ = os.Remove(newPath + "-shm")
+	// Checkpoint WAL into the main file so the renamed DB is self-contained;
+	// on failure abort before the rename so the old DB stays live.
+	if err := finalizeWorkingCopy(d, newPath); err != nil {
+		removeWorkingCopy(newPath)
+		log.Fatalf("Failed to finalize working copy: %v", err)
+	}
 
 	// Same-directory rename is atomic: the served DB path always resolves to
 	// either the fully-old or fully-new file, never a partial write.
@@ -237,7 +282,7 @@ func cmdDownload(args []string) {
 
 func cmdImport(args []string) {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
-	dbPath := fs.String("db", "data/rfc.db", "Output SQLite database path")
+	dbPath := fs.String("db", defaultDBPath, "Output SQLite database path")
 	_ = fs.Parse(args)
 
 	if fs.NArg() < 1 {
@@ -268,7 +313,7 @@ func cmdImport(args []string) {
 
 func cmdImportDir(args []string) {
 	fs := flag.NewFlagSet("import-dir", flag.ExitOnError)
-	dbPath := fs.String("db", "data/rfc.db", "Output SQLite database path")
+	dbPath := fs.String("db", defaultDBPath, "Output SQLite database path")
 	workers := fs.Int("workers", pipeline.DefaultConcurrency(), "Number of parallel parse workers")
 	_ = fs.Parse(args)
 
@@ -421,7 +466,7 @@ func cmdServe(args []string) {
 	}
 
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	dbPath := fs.String("db", "rfc.db", "Path to SQLite database")
+	dbPath := fs.String("db", defaultDBPath, "Path to SQLite database")
 	transport := fs.String("transport", defaultTransport, "Transport type: stdio or http (env: RFC_MCP_TRANSPORT, or PORT to force http)")
 	fs.StringVar(transport, "t", defaultTransport, "Shorthand for -transport")
 	addr := fs.String("addr", defaultAddr, "HTTP listen address (env: RFC_MCP_ADDR, or PORT)")
@@ -466,7 +511,8 @@ func cmdServe(args []string) {
 		mux.HandleFunc("/health", healthHandler)
 		mux.Handle("/", mcpH)
 		log.Printf("Starting rfc-mcp server on %s (HTTP)...", *addr)
-		if err := http.ListenAndServe(*addr, mux); err != nil {
+		srv := newHTTPServer(*addr, mux)
+		if err := srv.ListenAndServe(); err != nil {
 			log.Fatalf("Server error: %v", err)
 		}
 	default:

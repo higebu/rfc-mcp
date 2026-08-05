@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -41,6 +42,37 @@ func TestDraftsEnabled(t *testing.T) {
 				t.Errorf("draftsEnabled() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestNewHTTPServer asserts the serve HTTP transport uses an http.Server
+// with slowloris protections (request read deadline, header read deadline,
+// idle timeout, bounded header size) while leaving WriteTimeout unset so
+// long-lived MCP streaming responses are never cut off.
+func TestNewHTTPServer(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := newHTTPServer(":9999", mux)
+
+	if srv.Addr != ":9999" {
+		t.Errorf("Addr = %q, want %q", srv.Addr, ":9999")
+	}
+	if srv.Handler == nil {
+		t.Error("Handler is nil")
+	}
+	if srv.ReadHeaderTimeout <= 0 {
+		t.Errorf("ReadHeaderTimeout = %v, want > 0 (slowloris protection)", srv.ReadHeaderTimeout)
+	}
+	if srv.IdleTimeout <= 0 {
+		t.Errorf("IdleTimeout = %v, want > 0", srv.IdleTimeout)
+	}
+	if srv.MaxHeaderBytes <= 0 {
+		t.Errorf("MaxHeaderBytes = %d, want > 0", srv.MaxHeaderBytes)
+	}
+	if srv.ReadTimeout <= 0 {
+		t.Errorf("ReadTimeout = %v, want > 0 (slowloris protection via request body)", srv.ReadTimeout)
+	}
+	if srv.WriteTimeout != 0 {
+		t.Errorf("WriteTimeout = %v, want 0 (would cut off long-lived MCP streams)", srv.WriteTimeout)
 	}
 }
 
@@ -94,6 +126,39 @@ func TestBearerAuthMiddleware(t *testing.T) {
 	t.Run("wrong scheme", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/", nil)
 		req.Header.Set("Authorization", "Basic secret-token")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401, got %d", w.Code)
+		}
+	})
+
+	// Per RFC 7235 the auth-scheme name is case-insensitive.
+	for _, scheme := range []string{"bearer", "BEARER", "BeArEr"} {
+		t.Run("scheme case-insensitive: "+scheme, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/", nil)
+			req.Header.Set("Authorization", scheme+" secret-token")
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Errorf("expected 200 for %q scheme, got %d", scheme, w.Code)
+			}
+		})
+	}
+
+	t.Run("token stays case-sensitive", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("Authorization", "Bearer SECRET-TOKEN")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401 for wrong-case token, got %d", w.Code)
+		}
+	})
+
+	t.Run("scheme only, no token", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("Authorization", "Bearer")
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 		if w.Code != http.StatusUnauthorized {
@@ -277,6 +342,23 @@ func TestCmdCompletion_NoArgs(t *testing.T) {
 	}
 	if !strings.Contains(string(stderr), "Usage:") {
 		t.Errorf("expected Usage: message, got: %s", stderr)
+	}
+}
+
+// TestCmdServe_DBDefault asserts serve's -db default is the shared
+// defaultDBPath ("data/rfc.db") used by every other subcommand, not the
+// old divergent "rfc.db". flag.ExitOnError makes -h exit the process, so
+// the usage text is captured from a helper subprocess.
+func TestCmdServe_DBDefault(t *testing.T) {
+	if os.Getenv("CMD_SERVE_HELP_HELPER") == "1" {
+		cmdServe([]string{"-h"})
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestCmdServe_DBDefault")
+	cmd.Env = append(os.Environ(), "CMD_SERVE_HELP_HELPER=1")
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), `default "data/rfc.db"`) {
+		t.Errorf("serve -h usage should show -db default %q, got:\n%s", "data/rfc.db", out)
 	}
 }
 
@@ -651,6 +733,13 @@ func TestCmdUpdate(t *testing.T) {
 	if _, err := os.Stat(dbPath + ".new"); !os.IsNotExist(err) {
 		t.Errorf("expected no leftover %s.new file after update, stat err = %v", dbPath, err)
 	}
+	// The checkpoint+close must leave the renamed DB self-contained: no
+	// working-copy WAL/SHM sidecars may survive next to the .new path.
+	for _, suffix := range []string{".new-wal", ".new-shm"} {
+		if _, err := os.Stat(dbPath + suffix); !os.IsNotExist(err) {
+			t.Errorf("expected no leftover %s%s file after update, stat err = %v", dbPath, suffix, err)
+		}
+	}
 
 	d, err := db.Open(dbPath)
 	if err != nil {
@@ -774,6 +863,149 @@ func TestCmdUpdate_NoNewRFCs(t *testing.T) {
 	}
 	if _, err := os.Stat(dbPath + ".new"); !os.IsNotExist(err) {
 		t.Errorf("expected no leftover %s.new file after update, stat err = %v", dbPath, err)
+	}
+}
+
+// TestFinalizeWorkingCopy covers the checkpoint+close+sidecar-removal step
+// cmdUpdate runs before the atomic rename: on success the working copy's
+// -wal/-shm sidecars are gone, the main file is self-contained (reopenable
+// read-only, where the WAL cannot be replayed), and the checkpoint-failure
+// branch surfaces an error instead of renaming a copy whose WAL still holds
+// unwritten frames.
+func TestFinalizeWorkingCopy(t *testing.T) {
+	t.Run("success removes sidecars and leaves a self-contained file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "copy.db")
+		d, err := db.OpenReadWrite(path)
+		if err != nil {
+			t.Fatalf("OpenReadWrite: %v", err)
+		}
+		if err := d.InitSchema(); err != nil {
+			t.Fatalf("InitSchema: %v", err)
+		}
+		if err := d.Exec("INSERT INTO rfcs (number, title) VALUES (1, 'seed')"); err != nil {
+			t.Fatalf("Exec insert: %v", err)
+		}
+
+		if err := finalizeWorkingCopy(d, path); err != nil {
+			t.Fatalf("finalizeWorkingCopy: %v", err)
+		}
+
+		for _, suffix := range []string{"-wal", "-shm"} {
+			if _, statErr := os.Stat(path + suffix); !os.IsNotExist(statErr) {
+				t.Errorf("expected %s sidecar to be removed, stat err = %v", suffix, statErr)
+			}
+		}
+		reopened, err := db.Open(path)
+		if err != nil {
+			t.Fatalf("Open finalized copy read-only: %v", err)
+		}
+		defer reopened.Close()
+		if _, err := reopened.GetRFCMetadata(1); err != nil {
+			t.Errorf("GetRFCMetadata(1) on finalized copy: %v", err)
+		}
+	})
+
+	t.Run("checkpoint failure is returned", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "copy.db")
+		d, err := db.OpenReadWrite(path)
+		if err != nil {
+			t.Fatalf("OpenReadWrite: %v", err)
+		}
+		if err := d.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+
+		// A closed handle makes WALCheckpointTruncate fail deterministically.
+		err = finalizeWorkingCopy(d, path)
+		if err == nil {
+			t.Fatal("expected error from finalizeWorkingCopy on a closed handle")
+		}
+		if !strings.Contains(err.Error(), "checkpoint working copy") {
+			t.Errorf("error = %v, want mention of \"checkpoint working copy\"", err)
+		}
+	})
+}
+
+// TestCmdServe_HTTPTransport drives cmdServe's HTTP branch in-process: the
+// server built by newHTTPServer must come up on the requested address, answer
+// /health without auth, and gate the MCP endpoint behind the bearer token.
+// cmdServe never returns (ListenAndServe blocks until process exit), so it
+// runs on a goroutine that is deliberately leaked for the remainder of the
+// test binary's life.
+func TestCmdServe_HTTPTransport(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadWrite: %v", err)
+	}
+	if err := d.ExecScript(db.Schema); err != nil {
+		t.Fatalf("ExecScript(Schema): %v", err)
+	}
+	if err := d.ExecScript(testutil.SeedData); err != nil {
+		t.Fatalf("ExecScript(SeedData): %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reserve an ephemeral port, then hand its address to cmdServe. The tiny
+	// window between Close and ListenAndServe re-binding it is the standard
+	// trade-off: cmdServe builds its own listener, so the port cannot be
+	// injected directly.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close port probe: %v", err)
+	}
+
+	go cmdServe([]string{
+		"-db", dbPath,
+		"-transport", "http",
+		"-addr", addr,
+		"-bearer-token", "serve-test-token",
+	})
+
+	baseURL := "http://" + addr
+	client := &http.Client{Timeout: 2 * time.Second}
+	var healthStatus int
+	for range 100 {
+		resp, err := client.Get(baseURL + "/health")
+		if err == nil {
+			healthStatus = resp.StatusCode
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if healthStatus != http.StatusOK {
+		t.Fatalf("/health = %d, want %d", healthStatus, http.StatusOK)
+	}
+
+	// The MCP endpoint sits behind the bearer middleware; /health does not.
+	resp, err := client.Get(baseURL + "/")
+	if err != nil {
+		t.Fatalf("GET / without auth: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("GET / without auth = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, baseURL+"/", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer serve-test-token")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("GET / with auth: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		t.Error("GET / with valid token should pass the bearer middleware, got 401")
 	}
 }
 
