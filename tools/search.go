@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/higebu/rfc-mcp/db"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -34,6 +35,29 @@ Tips:
 - title:term restricts matches to section headings only.`,
 }
 
+// fts5QueryErrorSignatures are the messages SQLite's FTS5 query parser
+// produces for a malformed MATCH expression (observed with the
+// modernc.org/sqlite driver, e.g. `fts5: syntax error near "AND"`,
+// `unknown special query: `, `no such column: nosuchcol`,
+// `unterminated string`). Only these are safe to show the client
+// verbatim -- any other error under the same "invalid search query"
+// wrapping (e.g. "no such table: sections_fts") is an internal failure.
+var fts5QueryErrorSignatures = []string{
+	"fts5: syntax error",
+	"unknown special query",
+	"no such column:",
+	"unterminated string",
+}
+
+func isFTS5QueryError(msg string) bool {
+	for _, sig := range fts5QueryErrorSignatures {
+		if strings.Contains(msg, sig) {
+			return true
+		}
+	}
+	return false
+}
+
 func HandleSearch(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, input SearchInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input SearchInput) (*mcp.CallToolResult, any, error) {
 		if input.Query == "" {
@@ -49,15 +73,35 @@ func HandleSearch(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, 
 		if len(rfcs) == 0 && input.RFC != 0 {
 			rfcs = []int{input.RFC}
 		}
+		// Reject non-positive RFC numbers instead of silently binding
+		// them into the IN(...) filter, where they can never match.
+		for _, n := range rfcs {
+			if n <= 0 {
+				return errorResult(fmt.Sprintf("invalid RFC number %d in rfc/rfcs filter; RFC numbers must be positive", n)), nil, nil
+			}
+		}
 
 		results, err := d.Search(input.Query, rfcs, limit)
 		if err != nil {
-			return errorResult(fmt.Sprintf("search failed: %v", err)), nil, nil
+			// The db layer labels the MATCH query's failure "invalid search
+			// query", but that wrapping also covers infrastructure failures
+			// (e.g. a closed database), so additionally require a known
+			// FTS5 query-syntax signature before showing the detail: an
+			// FTS5 syntax problem is the caller's to fix and they need the
+			// message verbatim, while an internal database failure must not
+			// leak its detail. SQLite's generic "SQL logic error" marker is
+			// not enough -- modernc.org/sqlite prefixes every SQLITE_ERROR
+			// with it, including internal failures such as "no such table".
+			msg := err.Error()
+			if strings.Contains(msg, "invalid search query") && isFTS5QueryError(msg) {
+				return errorResult(fmt.Sprintf("search failed: %v", err)), nil, nil
+			}
+			return internalError("search failed", err)
 		}
 
 		data, err := json.MarshalIndent(results, "", "  ")
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to marshal: %v", err)), nil, nil
+			return internalError("failed to marshal result", err)
 		}
 
 		return textResult(string(data)), nil, nil

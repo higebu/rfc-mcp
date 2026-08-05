@@ -25,8 +25,61 @@ var fts5Operators = map[string]bool{
 	"AND": true, "OR": true, "NOT": true,
 }
 
+// consumePhrase returns the index just past the closing quote of the
+// double-quoted phrase starting at query[i] (which must be '"'), or len(query)
+// if the phrase is unterminated.
+func consumePhrase(query string, i int) int {
+	j := i + 1
+	for j < len(query) && query[j] != '"' {
+		j++
+	}
+	if j < len(query) {
+		j++ // include the closing quote
+	}
+	return j
+}
+
+// hasNearPrefix reports whether s begins with a case-insensitive "NEAR("
+// group opener.
+func hasNearPrefix(s string) bool {
+	return len(s) >= 5 && strings.EqualFold(s[:5], "NEAR(")
+}
+
+// consumeNear returns the index just past the matching close paren of the
+// NEAR(...) group starting at query[i] (which must point at the "NEAR("
+// prefix), or len(query) if unbalanced.
+func consumeNear(query string, i int) int {
+	j := i + 5
+	depth := 1
+	for j < len(query) && depth > 0 {
+		switch query[j] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		}
+		j++
+	}
+	return j
+}
+
+// columnFilterLen returns the length of the "col:" prefix at the start of s
+// when col is a filterable FTS5 column, or 0 when s starts with no such
+// prefix.
+func columnFilterLen(s string) int {
+	for col := range fts5Columns {
+		if len(s) > len(col) && s[len(col)] == ':' && s[:len(col)] == col {
+			return len(col) + 1
+		}
+	}
+	return 0
+}
+
 // sanitizeFTS5Query wraps bare hyphenated tokens in double quotes so FTS5
-// does not misinterpret the hyphen as a column-filter separator.
+// does not misinterpret the hyphen as a column-filter separator. Quoted
+// phrases, NEAR(...) groups, and column filters followed by either (e.g.
+// `title:"foo bar"`, `title:NEAR(a b)`) are consumed as single units and
+// passed through verbatim, so whitespace tokenization cannot split them.
 func sanitizeFTS5Query(query string) string {
 	var result []string
 	i := 0
@@ -39,33 +92,37 @@ func sanitizeFTS5Query(query string) string {
 		}
 
 		if query[i] == '"' {
-			j := i + 1
-			for j < n && query[j] != '"' {
-				j++
-			}
-			if j < n {
-				j++
-			}
+			j := consumePhrase(query, i)
 			result = append(result, query[i:j])
 			i = j
 			continue
 		}
 
-		if i+5 <= n && query[i:i+5] == "NEAR(" {
-			j := i + 5
-			depth := 1
-			for j < n && depth > 0 {
-				switch query[j] {
-				case '(':
-					depth++
-				case ')':
-					depth--
-				}
-				j++
-			}
+		if hasNearPrefix(query[i:]) {
+			j := consumeNear(query, i)
 			result = append(result, query[i:j])
 			i = j
 			continue
+		}
+
+		// A column filter followed by a quoted phrase or a NEAR(...) group
+		// is one syntactic unit: consume through the matching close
+		// quote/paren before whitespace tokenization can split it.
+		if colLen := columnFilterLen(query[i:]); colLen > 0 {
+			rest := i + colLen
+			if rest < n && query[rest] == '"' {
+				j := consumePhrase(query, rest)
+				result = append(result, query[i:j])
+				i = j
+				continue
+			}
+			if hasNearPrefix(query[rest:]) {
+				j := consumeNear(query, rest)
+				result = append(result, query[i:j])
+				i = j
+				continue
+			}
+			// Plain col:value falls through to bare-token handling below.
 		}
 
 		j := i
@@ -147,7 +204,7 @@ func (d *DB) Search(query string, rfcs []int, limit int) ([]SearchResult, error)
 	}
 	defer rows.Close()
 
-	var results []SearchResult
+	results := []SearchResult{} // non-nil so an empty result serializes as [], not null
 	for rows.Next() {
 		var r SearchResult
 		if err := rows.Scan(&r.RFC, &r.Number, &r.Title, &r.Snippet); err != nil {

@@ -2,6 +2,7 @@ package errata
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/higebu/rfc-mcp/db"
@@ -53,6 +54,43 @@ func TestParse_FieldsExact(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("errata id 1 = %+v, want %+v", got, want)
+	}
+}
+
+// TestParse_MalformedEntryAmongGood pins the partial-parse contract callers
+// rely on (see ingest/pipeline.parseErrata): a malformed entry is skipped
+// and reported via a non-nil joined error, but every good entry is still
+// returned alongside it.
+func TestParse_MalformedEntryAmongGood(t *testing.T) {
+	const jsonData = `[
+  {"errata_id": "not-a-number", "doc-id": "RFC1", "errata_status_code": "Verified"},
+  {"errata_id": "42", "doc-id": "RFC9293", "errata_status_code": "Verified",
+   "errata_type_code": "Technical", "section": "3.1", "orig_text": "a",
+   "correct_text": "b", "notes": "", "submit_date": "2023-01-01",
+   "submitter_name": "X", "verifier_name": null, "update_date": null}
+]`
+
+	items, err := Parse(strings.NewReader(jsonData))
+	if err == nil {
+		t.Error("Parse: err = nil, want a joined skipped-entry error")
+	}
+	if len(items) != 1 {
+		t.Fatalf("Parse returned %d entries, want the 1 good entry: %+v", len(items), items)
+	}
+	if items[0].ID != 42 || items[0].RFC != 9293 {
+		t.Errorf("good entry = %+v, want errata 42 for RFC 9293", items[0])
+	}
+}
+
+// TestParse_BrokenStream covers a truly broken stream (not a JSON array):
+// callers must be able to detect it as zero entries plus a non-nil error.
+func TestParse_BrokenStream(t *testing.T) {
+	items, err := Parse(strings.NewReader(`{"not": "an array"}`))
+	if err == nil {
+		t.Error("Parse: err = nil, want an error for a non-array stream")
+	}
+	if len(items) != 0 {
+		t.Errorf("Parse returned %d entries, want 0: %+v", len(items), items)
 	}
 }
 

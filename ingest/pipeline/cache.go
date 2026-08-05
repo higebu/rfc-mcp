@@ -39,10 +39,12 @@ func CacheDir() (string, error) {
 
 // loadCache reads a cached file's contents and modification time if present
 // and within ttl. Returns nil data (and a zero time) on a cache miss
-// (missing file or expired) rather than an error, so callers can treat
-// "miss" and "fetch fresh" uniformly. The modification time lets callers
-// record when the cached data was actually obtained (see
-// Pipeline.fetchCached) rather than the time of this read.
+// (missing file, expired, or zero-byte -- rfc-index.xml and errata.json are
+// never legitimately empty, so an empty file is a botched write, not data)
+// rather than an error, so callers can treat "miss" and "fetch fresh"
+// uniformly. The modification time lets callers record when the cached data
+// was actually obtained (see Pipeline.fetchCached) rather than the time of
+// this read.
 func loadCache(key string, ttl time.Duration) ([]byte, time.Time, error) {
 	dir, err := CacheDir()
 	if err != nil {
@@ -62,24 +64,24 @@ func loadCache(key string, ttl time.Duration) ([]byte, time.Time, error) {
 	if err != nil {
 		return nil, time.Time{}, nil
 	}
+	if len(data) == 0 {
+		return nil, time.Time{}, nil // zero-byte file: treat as a miss, not data
+	}
 
 	log.Printf("Cache hit: %s (%d bytes)", key, len(data))
 	return data, info.ModTime(), nil
 }
 
-// saveCache writes data to a cache file atomically via rename.
-func saveCache(key string, data []byte) error {
-	dir, err := CacheDir()
+// writeFileAtomic writes data to dir/name via a temp file in the same
+// directory plus os.Rename, so a crash or full disk mid-write can never
+// leave a truncated file behind at the final path. Shared by saveCache
+// (rfc-index.xml/errata.json) and fetchRFCText's raw-body cache, both of
+// which serve any existing file forever and so must never persist a
+// partial write.
+func writeFileAtomic(dir, name string, data []byte) error {
+	tmp, err := os.CreateTemp(dir, name+".tmp.*")
 	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create cache dir: %w", err)
-	}
-
-	tmp, err := os.CreateTemp(dir, key+".tmp.*")
-	if err != nil {
-		return fmt.Errorf("create temp cache file: %w", err)
+		return fmt.Errorf("create temp file: %w", err)
 	}
 	tmpPath := tmp.Name()
 
@@ -93,10 +95,33 @@ func saveCache(key string, data []byte) error {
 		return err
 	}
 
-	path := filepath.Join(dir, key)
-	if err := os.Rename(tmpPath, path); err != nil {
+	// os.CreateTemp creates the file with mode 0600 and os.Rename keeps
+	// it; widen to the conventional 0644 so cached files stay readable in
+	// shared cache/raw-dir setups (matching a plain os.WriteFile 0644).
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("rename cache file: %w", err)
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, filepath.Join(dir, name)); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+	return nil
+}
+
+// saveCache writes data to a cache file atomically via rename.
+func saveCache(key string, data []byte) error {
+	dir, err := CacheDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create cache dir: %w", err)
+	}
+
+	if err := writeFileAtomic(dir, key, data); err != nil {
+		return fmt.Errorf("write cache file %s: %w", key, err)
 	}
 
 	log.Printf("Cache saved: %s (%d bytes)", key, len(data))

@@ -40,9 +40,13 @@ type entry struct {
 // whole 11+ MB file into a single slice-of-structs. An entry whose doc-id
 // isn't an RFC (BCP/STD errata, none of which exist today but the schema
 // allows it) or whose errata_id doesn't parse as an integer is logged and
-// skipped rather than aborting the parse; the returned error, built with
-// errors.Join, is nil unless at least one entry was skipped or the JSON
-// stream itself was malformed.
+// skipped rather than aborting the parse: every successfully decoded entry
+// is still returned even when the error (built with errors.Join from the
+// per-entry failures, plus any malformation of the JSON stream itself) is
+// non-nil. Callers that can tolerate a few skipped entries should treat a
+// non-nil error accompanied by entries as a warning and proceed with the
+// entries; a non-nil error with zero entries means the stream itself is
+// broken and is fatal (see ingest/pipeline).
 func Parse(r io.Reader) ([]db.Errata, error) {
 	dec := json.NewDecoder(r)
 

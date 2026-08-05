@@ -3,6 +3,8 @@ package pipeline
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -26,6 +28,12 @@ const (
 	indexCacheKey  = "rfc-index.xml"
 	errataCacheKey = "errata.json"
 	minConcurrency = 8
+
+	// statusDBFailed marks a processOne outcome where fetch and parse
+	// succeeded but the database write failed. Unlike FETCH_FAILED (a
+	// per-RFC, non-fatal condition), it signals a globally broken database
+	// and makes processAll -- and thus Run/RunUpdate -- return an error.
+	statusDBFailed = "DB_FAILED"
 )
 
 // DefaultConcurrency returns a sensible default worker count for the
@@ -99,12 +107,42 @@ func (p *Pipeline) fetchCached(ctx context.Context, cacheKey, path string) ([]by
 	return data, fetchedAt, nil
 }
 
+// parseIndex parses rfc-index.xml bytes, tolerating individually malformed
+// entries: rfcindex.Parse skips those and reports them via a joined non-nil
+// error alongside the entries it did decode (see its doc comment). One bad
+// entry shouldn't abort a whole build/update, so a partial parse is logged
+// as a warning and its entries used as-is; a parse yielding zero entries
+// means the stream itself is broken and stays fatal.
+func parseIndex(data []byte) ([]db.RFC, error) {
+	rfcs, err := rfcindex.Parse(bytes.NewReader(data))
+	if err != nil {
+		if len(rfcs) == 0 {
+			return nil, err
+		}
+		log.Printf("warning: rfc-index.xml: proceeding with %d entries, some skipped: %v", len(rfcs), err)
+	}
+	return rfcs, nil
+}
+
+// parseErrata is parseIndex's counterpart for errata.json, with the same
+// partial-parse-is-a-warning / empty-parse-is-fatal contract.
+func parseErrata(data []byte) ([]db.Errata, error) {
+	items, err := errata.Parse(bytes.NewReader(data))
+	if err != nil {
+		if len(items) == 0 {
+			return nil, err
+		}
+		log.Printf("warning: errata.json: proceeding with %d entries, some skipped: %v", len(items), err)
+	}
+	return items, nil
+}
+
 func (p *Pipeline) loadIndex(ctx context.Context) ([]db.RFC, time.Time, error) {
 	data, fetchedAt, err := p.fetchCached(ctx, indexCacheKey, "/rfc-index.xml")
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	rfcs, err := rfcindex.Parse(bytes.NewReader(data))
+	rfcs, err := parseIndex(data)
 	return rfcs, fetchedAt, err
 }
 
@@ -113,7 +151,7 @@ func (p *Pipeline) loadErrata(ctx context.Context) ([]db.Errata, error) {
 	if err != nil {
 		return nil, err
 	}
-	return errata.Parse(bytes.NewReader(data))
+	return parseErrata(data)
 }
 
 // fetchLive is fetchCached's counterpart for RunUpdate: it always performs a
@@ -138,7 +176,7 @@ func (p *Pipeline) loadIndexLive(ctx context.Context) ([]db.RFC, time.Time, erro
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	rfcs, err := rfcindex.Parse(bytes.NewReader(data))
+	rfcs, err := parseIndex(data)
 	return rfcs, fetchedAt, err
 }
 
@@ -147,7 +185,7 @@ func (p *Pipeline) loadErrataLive(ctx context.Context) ([]db.Errata, error) {
 	if err != nil {
 		return nil, err
 	}
-	return errata.Parse(bytes.NewReader(data))
+	return parseErrata(data)
 }
 
 // issuedNumbersInRange returns the sorted, issued (non-not-issued) RFC
@@ -216,13 +254,16 @@ func (p *Pipeline) Run(ctx context.Context, from, to int) error {
 	numbers, textUnavailable := issuedNumbersInRange(rfcs, from, to)
 	log.Printf("Processing %d issued RFCs with %d workers...", len(numbers), p.Workers)
 
-	stats := p.processAll(ctx, numbers)
+	stats, dbErr := p.processAll(ctx, numbers)
 	stats["TEXT_UNAVAILABLE"] = textUnavailable
 	log.Println("Pipeline complete:")
-	for _, k := range []string{"OK", "FETCH_FAILED", "PARSE_DEGRADED", "TEXT_UNAVAILABLE"} {
+	for _, k := range []string{"OK", "FETCH_FAILED", "PARSE_DEGRADED", "TEXT_UNAVAILABLE", statusDBFailed} {
 		if stats[k] > 0 {
 			log.Printf("  %s: %d", k, stats[k])
 		}
+	}
+	if dbErr != nil {
+		return fmt.Errorf("database write failure: %w", dbErr)
 	}
 	return p.recordBuildMeta(indexFetchedAt)
 }
@@ -277,13 +318,16 @@ func (p *Pipeline) RunUpdate(ctx context.Context) error {
 	}
 	log.Printf("Found %d new RFCs to fetch (of %d issued)", len(newNumbers), len(issued))
 
-	stats := p.processAll(ctx, newNumbers)
+	stats, dbErr := p.processAll(ctx, newNumbers)
 	stats["TEXT_UNAVAILABLE"] = textUnavailable
 	log.Println("Update complete:")
-	for _, k := range []string{"OK", "FETCH_FAILED", "PARSE_DEGRADED", "TEXT_UNAVAILABLE"} {
+	for _, k := range []string{"OK", "FETCH_FAILED", "PARSE_DEGRADED", "TEXT_UNAVAILABLE", statusDBFailed} {
 		if stats[k] > 0 {
 			log.Printf("  %s: %d", k, stats[k])
 		}
+	}
+	if dbErr != nil {
+		return fmt.Errorf("database write failure: %w", dbErr)
 	}
 	return p.recordBuildMeta(indexFetchedAt)
 }
@@ -309,11 +353,21 @@ func (p *Pipeline) recordBuildMeta(indexFetchedAt time.Time) error {
 // caps the connection pool to one connection, so writes are already
 // serialized there (mirrors 3gpp-mcp's Pipeline.Run, which relies on the
 // same property instead of adding a redundant mutex).
-func (p *Pipeline) processAll(ctx context.Context, numbers []int) map[string]int {
+//
+// Per-RFC fetch/parse failures are counted in stats and never returned as
+// an error. A DB write failure (statusDBFailed) is different: it means the
+// database itself is broken and every remaining write would fail too, so
+// the first one cancels the worker pool and is returned for Run/RunUpdate
+// to propagate.
+func (p *Pipeline) processAll(ctx context.Context, numbers []int) (map[string]int, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	sem := make(chan struct{}, p.Workers)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	stats := make(map[string]int)
+	var dbErr error
 	total := len(numbers)
 
 	for i, number := range numbers {
@@ -339,11 +393,15 @@ func (p *Pipeline) processAll(ctx context.Context, numbers []int) map[string]int
 			}
 			mu.Lock()
 			stats[status]++
+			if status == statusDBFailed && dbErr == nil {
+				dbErr = err
+				cancel()
+			}
 			mu.Unlock()
 		}()
 	}
 	wg.Wait()
-	return stats
+	return stats, dbErr
 }
 
 // processOne fetches, parses, and stores a single RFC's body text.
@@ -366,10 +424,10 @@ func (p *Pipeline) processOne(ctx context.Context, number int) (string, error) {
 	dbSections, refs := buildSectionsAndReferences(number, sections)
 
 	if err := p.DB.InsertRFCWithSections(rfc, dbSections); err != nil {
-		return "FETCH_FAILED", fmt.Errorf("insert rfc %d: %w", number, err)
+		return statusDBFailed, fmt.Errorf("insert rfc %d: %w", number, err)
 	}
-	if err := p.DB.InsertReferences(refs); err != nil {
-		return "FETCH_FAILED", fmt.Errorf("insert references for rfc %d: %w", number, err)
+	if err := p.replaceReferences(number, refs); err != nil {
+		return statusDBFailed, fmt.Errorf("insert references for rfc %d: %w", number, err)
 	}
 
 	// ParseRFCText's Tier-3 fallback (whole body as one section) sets
@@ -391,7 +449,7 @@ func (p *Pipeline) Download(ctx context.Context, from, to int) error {
 	if err != nil {
 		return fmt.Errorf("load rfc-index.xml: %w", err)
 	}
-	rfcs, err := rfcindex.Parse(bytes.NewReader(data))
+	rfcs, err := parseIndex(data)
 	if err != nil {
 		return fmt.Errorf("parse rfc-index.xml: %w", err)
 	}
@@ -622,7 +680,10 @@ func (p *Pipeline) ImportFile(path string) error {
 
 func (p *Pipeline) importRaw(number int, raw []byte) error {
 	rfc, err := p.DB.GetRFCMetadata(number)
-	if err != nil {
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// Genuinely not in the database yet (no rfc-index.xml row loaded):
+		// fabricate minimal metadata from the body itself.
 		title := extractTitleFromHeader(raw)
 		if title == "" {
 			title = fmt.Sprintf("RFC %d", number)
@@ -630,6 +691,10 @@ func (p *Pipeline) importRaw(number int, raw []byte) error {
 		// HasText is true unconditionally: importRaw is only ever called with
 		// an actual RFC .txt body already in hand.
 		rfc = &db.RFC{Number: number, Title: title, HasText: true}
+	case err != nil:
+		// Any other error is a real database failure (closed DB, corruption,
+		// I/O); fabricating metadata here would silently mask it.
+		return fmt.Errorf("look up rfc %d metadata: %w", number, err)
 	}
 
 	sections, parseErr := rfctxt.ParseRFCText(raw, number, rfc.Title)
@@ -641,6 +706,17 @@ func (p *Pipeline) importRaw(number int, raw []byte) error {
 
 	if err := p.DB.InsertRFCWithSections(*rfc, dbSections); err != nil {
 		return fmt.Errorf("insert rfc %d: %w", number, err)
+	}
+	return p.replaceReferences(number, refs)
+}
+
+// replaceReferences persists the newly extracted references for an RFC.
+// InsertReferences already deletes stale rows for every source RFC present
+// in refs, but an empty set gives it nothing to scope that delete to, so a
+// re-parse that yields no references must clear the old rows explicitly.
+func (p *Pipeline) replaceReferences(number int, refs []db.Reference) error {
+	if len(refs) == 0 {
+		return p.DB.DeleteReferencesForRFC(number)
 	}
 	return p.DB.InsertReferences(refs)
 }

@@ -1,7 +1,9 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/higebu/rfc-mcp/db"
@@ -36,6 +38,21 @@ func errorResult(text string) *mcp.CallToolResult {
 	}
 }
 
+// internalError is the full handler return value for an unexpected
+// internal failure (database error, marshalling error): the underlying
+// error is logged server-side, while the client sees only the generic
+// clientMsg. The Go error handed back to the framework is deliberately
+// built from clientMsg alone -- the SDK's typed-handler wrapper copies a
+// non-nil error's text into client-visible content (discarding the
+// handler's own result), so wrapping err itself would leak internal
+// detail to the client. Returning a non-nil error still marks the call
+// failed for the framework and exposes it to server middleware via
+// CallToolResult.GetError.
+func internalError(clientMsg string, err error) (*mcp.CallToolResult, any, error) {
+	log.Printf("%s: %v", clientMsg, err)
+	return errorResult(clientMsg), nil, errors.New(clientMsg)
+}
+
 func paginateText(content string, offset, maxLines, maxChars int) *mcp.CallToolResult {
 	lines := strings.Split(content, "\n")
 	totalLines := len(lines)
@@ -45,6 +62,12 @@ func paginateText(content string, offset, maxLines, maxChars int) *mcp.CallToolR
 	}
 	if maxLines <= 0 {
 		maxLines = defaultMaxLines
+	}
+	// Clamp before computing end: offset and maxLines come from MCP tool
+	// input, and offset+maxLines with maxLines near math.MaxInt would wrap
+	// negative and panic on the slice index below.
+	if maxLines > totalLines {
+		maxLines = totalLines
 	}
 
 	if offset >= totalLines {
@@ -56,6 +79,10 @@ func paginateText(content string, offset, maxLines, maxChars int) *mcp.CallToolR
 		end = totalLines
 	}
 
+	// maxChars is a hard cap counted in bytes (documented as such in the
+	// tool schemas), with one exception: a single line longer than
+	// maxChars is returned whole, so pagination always makes progress.
+	charLimited := false
 	if maxChars > 0 {
 		charCount := 0
 		charEnd := end
@@ -72,12 +99,16 @@ func paginateText(content string, offset, maxLines, maxChars int) *mcp.CallToolR
 		}
 		if charEnd < end {
 			end = charEnd
+			charLimited = true
 		}
 	}
 
 	// Smart cut: extend to the next paragraph boundary (empty line).
-	// maxLines * 1.2 caps how far we look ahead.
-	if end < totalLines {
+	// maxLines * 1.2 caps how far we look ahead. Never extend past a
+	// maxChars cut -- that would exceed the caller's byte cap -- and even
+	// when the initial window fit under maxChars on its own, stop the
+	// extension before it pushes the running byte total past the cap.
+	if end < totalLines && !charLimited {
 		linesUsed := end - offset
 		hardLimit := end + linesUsed/5
 		if hardLimit <= end {
@@ -86,7 +117,19 @@ func paginateText(content string, offset, maxLines, maxChars int) *mcp.CallToolR
 		if hardLimit > totalLines {
 			hardLimit = totalLines
 		}
+		charCount := 0
+		if maxChars > 0 {
+			for i := offset; i < end; i++ {
+				charCount += len(lines[i]) + 1
+			}
+		}
 		for i := end; i < hardLimit; i++ {
+			if maxChars > 0 {
+				charCount += len(lines[i]) + 1
+				if charCount > maxChars {
+					break
+				}
+			}
 			if lines[i] == "" {
 				end = i + 1
 				break
