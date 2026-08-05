@@ -39,10 +39,12 @@ func CacheDir() (string, error) {
 
 // loadCache reads a cached file's contents and modification time if present
 // and within ttl. Returns nil data (and a zero time) on a cache miss
-// (missing file or expired) rather than an error, so callers can treat
-// "miss" and "fetch fresh" uniformly. The modification time lets callers
-// record when the cached data was actually obtained (see
-// Pipeline.fetchCached) rather than the time of this read.
+// (missing file, expired, or zero-byte -- rfc-index.xml and errata.json are
+// never legitimately empty, so an empty file is a botched write, not data)
+// rather than an error, so callers can treat "miss" and "fetch fresh"
+// uniformly. The modification time lets callers record when the cached data
+// was actually obtained (see Pipeline.fetchCached) rather than the time of
+// this read.
 func loadCache(key string, ttl time.Duration) ([]byte, time.Time, error) {
 	dir, err := CacheDir()
 	if err != nil {
@@ -61,6 +63,9 @@ func loadCache(key string, ttl time.Duration) ([]byte, time.Time, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, time.Time{}, nil
+	}
+	if len(data) == 0 {
+		return nil, time.Time{}, nil // zero-byte file: treat as a miss, not data
 	}
 
 	log.Printf("Cache hit: %s (%d bytes)", key, len(data))

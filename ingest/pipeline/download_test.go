@@ -60,6 +60,43 @@ func TestFetchRFCText_Success(t *testing.T) {
 	}
 }
 
+// TestFetchRFCText_EmptyCachedFileRefetched: a zero-byte rfcN.txt in rawDir
+// (a botched write) must be treated as absent -- re-fetched from the network
+// and replaced -- rather than returned as the RFC's body forever (issue #10).
+func TestFetchRFCText_EmptyCachedFileRefetched(t *testing.T) {
+	var requests int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = w.Write([]byte("RFC 42 body"))
+	}))
+	defer ts.Close()
+	withTestBaseURL(t, ts.URL)
+
+	rawDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(rawDir, "rfc42.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := FetchRFCText(context.Background(), ts.Client(), 42, rawDir)
+	if err != nil {
+		t.Fatalf("FetchRFCText: %v", err)
+	}
+	if string(data) != "RFC 42 body" {
+		t.Errorf("data = %q, want the re-fetched body", data)
+	}
+	if requests != 1 {
+		t.Errorf("requests = %d, want 1 (empty cache file must not count as a hit)", requests)
+	}
+
+	onDisk, err := os.ReadFile(filepath.Join(rawDir, "rfc42.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(onDisk) != "RFC 42 body" {
+		t.Errorf("cached file = %q, want the re-fetched body to replace the empty file", onDisk)
+	}
+}
+
 // TestFetchRFCText_RawWriteLeavesNoTempFiles pins the atomic raw-cache
 // write (issue #9): after a fetch, rawDir must contain exactly the final
 // rfcN.txt -- the temp file used for the atomic rename must be gone, and

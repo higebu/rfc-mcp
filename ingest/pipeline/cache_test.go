@@ -29,6 +29,32 @@ func TestCacheDir(t *testing.T) {
 	}
 }
 
+// TestLoadCache_EmptyFile: a zero-byte cache file (e.g. a botched write) is
+// a miss, not a hit -- otherwise the pipeline would parse empty data instead
+// of falling through to a live fetch (issue #10).
+func TestLoadCache_EmptyFile(t *testing.T) {
+	dir := withTempCacheDir(t)
+
+	cacheSubdir := filepath.Join(dir, "rfc-mcp")
+	if err := os.MkdirAll(cacheSubdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheSubdir, "test.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	data, mtime, err := loadCache("test.txt", time.Hour)
+	if err != nil {
+		t.Fatalf("loadCache: %v", err)
+	}
+	if data != nil {
+		t.Errorf("loadCache on empty file = %q, want nil (cache miss)", data)
+	}
+	if !mtime.IsZero() {
+		t.Errorf("loadCache mtime on empty file = %v, want zero", mtime)
+	}
+}
+
 func TestSaveAndLoadCache(t *testing.T) {
 	withTempCacheDir(t)
 

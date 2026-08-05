@@ -68,7 +68,9 @@ func fetchRFCText(ctx context.Context, client *http.Client, number int, rawDir, 
 	name := fmt.Sprintf("rfc%d.txt", number)
 
 	if rawDir != "" {
-		if data, err := os.ReadFile(filepath.Join(rawDir, name)); err == nil {
+		// A zero-byte file is a botched write, not a cached body (no RFC's
+		// plain text is empty): treat it as absent and re-fetch.
+		if data, err := os.ReadFile(filepath.Join(rawDir, name)); err == nil && len(data) > 0 {
 			return data, nil
 		}
 	}
