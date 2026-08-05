@@ -27,12 +27,30 @@ var runningHeaderDateRE = regexp.MustCompile(`(?i)^(?:\d{1,2}\s+)?(?:january|feb
 // (RFC 791/768). Body text resuming directly after a header-less page
 // break (RFC 849's indented prose, RFC 1142's mid-sentence breaks) fits
 // neither shape and must be kept: dropping it silently loses content.
+//
+// The column-justified shape additionally requires at least one ASCII
+// letter: real running headers always carry text (an RFC number+title
+// segment, or a month name in the date-only style), while monospaced
+// body content can be multi-segment yet letter-free — a packet-diagram
+// bit ruler ("0                   1                   2") landing right
+// after a page break is digits only and must be kept.
 func isRunningHeader(line string) bool {
 	trimmed := strings.TrimSpace(line)
-	if strings.Contains(trimmed, "   ") {
+	if strings.Contains(trimmed, "   ") && hasLetter(trimmed) {
 		return true
 	}
 	return runningHeaderDateRE.MatchString(trimmed)
+}
+
+// hasLetter reports whether s contains an ASCII letter.
+func hasLetter(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanLines strips a UTF-8 BOM (present on e.g. RFC 9293), normalizes

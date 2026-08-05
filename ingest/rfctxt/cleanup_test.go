@@ -151,6 +151,26 @@ func TestRemovePagination(t *testing.T) {
 			},
 		},
 		{
+			// A packet-diagram bit ruler landing as the first non-blank
+			// line after a form feed is digits-only: it must not be
+			// mistaken for a column-justified running header and eaten.
+			name: "digits-only bit ruler after form feed survives",
+			in: []string{
+				"The diagram below shows the header layout:",
+				"",
+				"Author                                                        [Page 3]",
+				"\f",
+				"    0                   1                   2                   3",
+				"    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1",
+			},
+			want: []string{
+				"The diagram below shows the header layout:",
+				"",
+				"    0                   1                   2                   3",
+				"    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1",
+			},
+		},
+		{
 			// RFC 1142 scatters form feeds mid-sentence (even mid-word:
 			// "manual\fArea\fAddresses"), with no footers and no running
 			// headers anywhere; the continuation line after each break is
@@ -194,6 +214,10 @@ func TestIsRunningHeader(t *testing.T) {
 		{"                                                          September 1981", true},
 		{"September 1981                                                          ", true},
 		{"28 Aug 1980", true},
+		// A packet-diagram bit ruler is multi-segment but digits-only;
+		// running headers always carry at least one letter.
+		{"0                   1                   2                   3", false},
+		{" 0                   1                   2                   3", false},
 		// Body prose after a header-less page break must not be mistaken
 		// for a running header (RFC 849, RFC 1142).
 		{"     A more short-term solution is to make possible faster and more", false},
