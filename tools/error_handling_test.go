@@ -100,6 +100,32 @@ func TestSearchSyntaxErrorIsShownVerbatim(t *testing.T) {
 	}
 }
 
+// TestSearchInternalErrorNotShownVerbatim: modernc.org/sqlite prefixes
+// every SQLITE_ERROR with "SQL logic error", so a missing-table failure
+// carries the same marker as a bad FTS5 query and both end up wrapped as
+// "invalid search query". It must still take the generic internalError
+// path rather than leaking schema detail to the client.
+func TestSearchInternalErrorNotShownVerbatim(t *testing.T) {
+	d := setupTestDB(t)
+	if err := d.Exec("DROP TABLE sections_fts"); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+	result, _, err := HandleSearch(d)(context.Background(), nil, SearchInput{Query: "tcp"})
+	if err == nil {
+		t.Fatal("expected a non-nil Go error for an internal database failure")
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError result")
+	}
+	text := getTextContent(result)
+	if strings.Contains(text, "no such table") || strings.Contains(text, "sections_fts") {
+		t.Errorf("internal detail leaked to client: %q", text)
+	}
+	if text != "search failed" {
+		t.Errorf("expected generic client message, got: %q", text)
+	}
+}
+
 // TestFetchAndParseDraftPreservesNotFound: the error returned for an
 // unknown draft must keep drafts.ErrNotFound in its chain (it used to be
 // flattened through errors.New, losing the identity).

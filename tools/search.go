@@ -35,6 +35,29 @@ Tips:
 - title:term restricts matches to section headings only.`,
 }
 
+// fts5QueryErrorSignatures are the messages SQLite's FTS5 query parser
+// produces for a malformed MATCH expression (observed with the
+// modernc.org/sqlite driver, e.g. `fts5: syntax error near "AND"`,
+// `unknown special query: `, `no such column: nosuchcol`,
+// `unterminated string`). Only these are safe to show the client
+// verbatim -- any other error under the same "invalid search query"
+// wrapping (e.g. "no such table: sections_fts") is an internal failure.
+var fts5QueryErrorSignatures = []string{
+	"fts5: syntax error",
+	"unknown special query",
+	"no such column:",
+	"unterminated string",
+}
+
+func isFTS5QueryError(msg string) bool {
+	for _, sig := range fts5QueryErrorSignatures {
+		if strings.Contains(msg, sig) {
+			return true
+		}
+	}
+	return false
+}
+
 func HandleSearch(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, input SearchInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input SearchInput) (*mcp.CallToolResult, any, error) {
 		if input.Query == "" {
@@ -62,14 +85,15 @@ func HandleSearch(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, 
 		if err != nil {
 			// The db layer labels the MATCH query's failure "invalid search
 			// query", but that wrapping also covers infrastructure failures
-			// (e.g. a closed database), so additionally require SQLite's
-			// "SQL logic error" marker (SQLITE_ERROR, which is what a bad
-			// FTS5 expression compiles to) before showing the detail: an
+			// (e.g. a closed database), so additionally require a known
+			// FTS5 query-syntax signature before showing the detail: an
 			// FTS5 syntax problem is the caller's to fix and they need the
 			// message verbatim, while an internal database failure must not
-			// leak its detail.
+			// leak its detail. SQLite's generic "SQL logic error" marker is
+			// not enough -- modernc.org/sqlite prefixes every SQLITE_ERROR
+			// with it, including internal failures such as "no such table".
 			msg := err.Error()
-			if strings.Contains(msg, "invalid search query") && strings.Contains(msg, "SQL logic error") {
+			if strings.Contains(msg, "invalid search query") && isFTS5QueryError(msg) {
 				return errorResult(fmt.Sprintf("search failed: %v", err)), nil, nil
 			}
 			return internalError("search failed", err)

@@ -105,7 +105,9 @@ func paginateText(content string, offset, maxLines, maxChars int) *mcp.CallToolR
 
 	// Smart cut: extend to the next paragraph boundary (empty line).
 	// maxLines * 1.2 caps how far we look ahead. Never extend past a
-	// maxChars cut -- that would exceed the caller's byte cap.
+	// maxChars cut -- that would exceed the caller's byte cap -- and even
+	// when the initial window fit under maxChars on its own, stop the
+	// extension before it pushes the running byte total past the cap.
 	if end < totalLines && !charLimited {
 		linesUsed := end - offset
 		hardLimit := end + linesUsed/5
@@ -115,7 +117,19 @@ func paginateText(content string, offset, maxLines, maxChars int) *mcp.CallToolR
 		if hardLimit > totalLines {
 			hardLimit = totalLines
 		}
+		charCount := 0
+		if maxChars > 0 {
+			for i := offset; i < end; i++ {
+				charCount += len(lines[i]) + 1
+			}
+		}
 		for i := end; i < hardLimit; i++ {
+			if maxChars > 0 {
+				charCount += len(lines[i]) + 1
+				if charCount > maxChars {
+					break
+				}
+			}
 			if lines[i] == "" {
 				end = i + 1
 				break
