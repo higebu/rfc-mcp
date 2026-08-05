@@ -93,6 +93,45 @@ func TestRemovePagination(t *testing.T) {
 				"more content",
 			},
 		},
+		{
+			// RFC 849 page 2 carries no running header at all: the page
+			// starts directly with indented body prose, which must not be
+			// eaten as if it were a header line.
+			name: "page starting with body prose keeps the prose (RFC 849)",
+			in: []string{
+				"formats.  I have three suggestions.",
+				"",
+				"Crispin                                                         [Page 1]",
+				"\f",
+				"     A more short-term solution is to make possible faster and more",
+				"thorough updating of the various local copies of the name tables.",
+			},
+			want: []string{
+				"formats.  I have three suggestions.",
+				"",
+				"     A more short-term solution is to make possible faster and more",
+				"thorough updating of the various local copies of the name tables.",
+			},
+		},
+		{
+			// RFC 1142 scatters form feeds mid-sentence (even mid-word:
+			// "manual\fArea\fAddresses"), with no footers and no running
+			// headers anywhere; the continuation line after each break is
+			// real content and must survive.
+			name: "mid-text page break keeps the continuation line (RFC 1142)",
+			in: []string{
+				"ter manual",
+				"\f",
+				"Area",
+				"\f",
+				"Addresses. This parameter is set locally",
+			},
+			want: []string{
+				"ter manual",
+				"Area",
+				"Addresses. This parameter is set locally",
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -101,6 +140,34 @@ func TestRemovePagination(t *testing.T) {
 				t.Errorf("removePagination() = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsRunningHeader(t *testing.T) {
+	tests := []struct {
+		line string
+		want bool
+	}{
+		// Column-justified running headers (2+ segments, 3+ space gaps).
+		{"RFC 4271                         BGP-4                      January 2006", true},
+		{"RFC 17& 17a         Re: HOST-IMP Protocol & Response         August 1969", true},
+		{"August 1982                                                      RFC 821", true},
+		{"Network Working Group                                          J. Postel", true},
+		// Date-only headers (RFC 791 right- or left-justified, RFC 768).
+		{"                                                          September 1981", true},
+		{"September 1981                                                          ", true},
+		{"28 Aug 1980", true},
+		// Body prose after a header-less page break must not be mistaken
+		// for a running header (RFC 849, RFC 1142).
+		{"     A more short-term solution is to make possible faster and more", false},
+		{"mission facility, as does a broadcast sub", false},
+		{"Area", false},
+		{"Addresses parameter.", false},
+	}
+	for _, tt := range tests {
+		if got := isRunningHeader(tt.line); got != tt.want {
+			t.Errorf("isRunningHeader(%q) = %v, want %v", tt.line, got, tt.want)
+		}
 	}
 }
 
