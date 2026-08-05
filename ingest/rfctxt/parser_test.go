@@ -677,6 +677,53 @@ Wire Format Details
 	}
 }
 
+// TestParseRFCTextWholesaleTier2KeepsFrontMatter covers the wholesale
+// Tier-2 replacement path (Tier 1 hopeless, headings only locatable via
+// the TOC): well-known unnumbered front matter that Tier 1 did find —
+// an Abstract is never listed in its own TOC, so Tier 2 can never
+// recover it — must survive the replacement as its own section instead
+// of being silently merged into the header blob.
+func TestParseRFCTextWholesaleTier2KeepsFrontMatter(t *testing.T) {
+	raw := []byte(`Abstract
+
+   This memo demonstrates the wholesale Tier-2 path.
+
+Table of Contents
+
+   1. Introduction ......... 2
+   2. Details .............. 3` + strings.Repeat("\n", 13) + `
+                            1.  INTRODUCTION
+
+   intro body
+
+                            2.  DETAILS
+
+   details body
+`)
+	sections, err := ParseRFCText(raw, 9999, "Test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]Section)
+	for _, s := range sections {
+		got[s.Number] = s
+	}
+	for _, want := range []string{"abstract", "1", "2"} {
+		if _, ok := got[want]; !ok {
+			t.Fatalf("missing section %q in %+v", want, sections)
+		}
+	}
+	if c := got["abstract"].Content; !strings.Contains(c, "This memo demonstrates") {
+		t.Errorf("abstract content = %q, want the abstract paragraph", c)
+	}
+	if c := got["abstract"].Content; strings.Contains(c, "Introduction .....") {
+		t.Errorf("abstract content = %q, must not contain the excised TOC listing", c)
+	}
+	if got["table-of-contents"].Number != "" {
+		t.Errorf("the TOC block itself must stay excised, got %+v", got["table-of-contents"])
+	}
+}
+
 func TestSupplementFromTier2SkipsCovered(t *testing.T) {
 	tier1 := []rawHeading{
 		{lineIdx: 10, number: "1", title: "First"},

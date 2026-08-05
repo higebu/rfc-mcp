@@ -48,10 +48,17 @@ func ParseRFCText(raw []byte, rfcNumber int, title string) ([]Section, error) {
 		if len(tier1) < 3 {
 			// Tier 1 is hopeless — replace it with the TOC-anchored
 			// headings outright, and excise the TOC block from the
-			// header section (it's a location aid, not content).
+			// header section (it's a location aid, not content). Well-
+			// known unnumbered front matter Tier 1 did find (an Abstract
+			// is never listed in its own TOC, so Tier 2 can't recover
+			// it) is grafted back in rather than lost wholesale.
 			if tier2 := detectTier2(lines, tocEnd, tocEntries); len(tier2) >= 2 {
 				headings = tier2
 				excludeStart, excludeEnd = headingIdx, tocEnd
+				if keep := tier1KnownUnnumberedOutside(tier1, tier2, excludeStart, excludeEnd); len(keep) > 0 {
+					headings = append(append([]rawHeading{}, tier2...), keep...)
+					sort.Slice(headings, func(a, b int) bool { return headings[a].lineIdx < headings[b].lineIdx })
+				}
 			}
 		} else if hasUncoveredTOCEntries(tocEntries, tier1) {
 			// Tier 1 is healthy but the TOC lists sections it never
@@ -78,6 +85,38 @@ func ParseRFCText(raw []byte, rfcNumber int, title string) ([]Section, error) {
 	headings = rescueDanglingParents(lines, headings, tocStart, tocEnd)
 	headings = reparentDanglingAncestors(headings)
 	return assembleSections(lines, headings, excludeStart, excludeEnd), nil
+}
+
+// tier1KnownUnnumberedOutside returns the Tier-1 headings worth keeping
+// when Tier 2 replaces Tier 1 wholesale: well-known unnumbered headings
+// (Abstract, Status of This Memo, ... — recognizable by their slug
+// number, which the numbered/lettered path never produces) that sit
+// outside the excised TOC block and that Tier 2 didn't already produce
+// under the same number or on the same line. Tier 1's numbered findings
+// are deliberately not kept — a Tier-1 yield this low means they are as
+// likely false positives as real headings, which is why the wholesale
+// replacement exists.
+func tier1KnownUnnumberedOutside(tier1, tier2 []rawHeading, excludeStart, excludeEnd int) []rawHeading {
+	numbers := make(map[string]bool, len(tier2))
+	taken := make(map[int]bool, len(tier2))
+	for _, h := range tier2 {
+		numbers[h.number] = true
+		taken[h.lineIdx] = true
+	}
+	var keep []rawHeading
+	for _, h := range tier1 {
+		if h.number != slugify(h.title) {
+			continue
+		}
+		if excludeStart <= h.lineIdx && h.lineIdx < excludeEnd {
+			continue
+		}
+		if numbers[h.number] || taken[h.lineIdx] {
+			continue
+		}
+		keep = append(keep, h)
+	}
+	return keep
 }
 
 // tocEntryNumber returns the section number a TOC entry will produce if
