@@ -3,6 +3,7 @@ package db
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -349,5 +350,70 @@ func TestWALCheckpointTruncate(t *testing.T) {
 	}
 	if err := d.WALCheckpointTruncate(); err == nil {
 		t.Error("expected error from WALCheckpointTruncate on a closed handle")
+	}
+}
+
+// TestWALCheckpointTruncate_Busy covers the busy branch: a concurrent reader
+// holding an open read transaction pins the WAL, so a TRUNCATE checkpoint
+// cannot complete and the pragma reports busy=1. WALCheckpointTruncate must
+// surface that as an error (cmdUpdate relies on it to abort the atomic swap
+// rather than rename a copy whose WAL still holds unwritten frames), and must
+// succeed once the reader is gone.
+func TestWALCheckpointTruncate_Busy(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "wal.db")
+	w, err := OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadWrite: %v", err)
+	}
+	defer w.Close()
+	if err := w.InitSchema(); err != nil {
+		t.Fatalf("InitSchema: %v", err)
+	}
+	if err := w.Exec("INSERT INTO rfcs (number, title) VALUES (1, 'seed')"); err != nil {
+		t.Fatalf("Exec insert: %v", err)
+	}
+
+	r, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open reader: %v", err)
+	}
+	defer r.Close()
+	tx, err := r.conn.Begin()
+	if err != nil {
+		t.Fatalf("Begin reader tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// The read lock is only taken on the first read, so actually read.
+	var n int
+	if err := tx.QueryRow("SELECT count(*) FROM rfcs").Scan(&n); err != nil {
+		t.Fatalf("reader select: %v", err)
+	}
+
+	// Frames appended after the reader's mark can never be checkpointed while
+	// its transaction stays open, guaranteeing busy=1 rather than depending on
+	// TRUNCATE's stricter no-readers requirement alone.
+	if err := w.Exec("INSERT INTO rfcs (number, title) VALUES (2, 'post-reader')"); err != nil {
+		t.Fatalf("Exec insert past reader mark: %v", err)
+	}
+	// Shrink the writer's 5s busy_timeout so the blocked checkpoint gives up
+	// quickly instead of stalling the test.
+	if err := w.Exec("PRAGMA busy_timeout=100"); err != nil {
+		t.Fatalf("Exec busy_timeout: %v", err)
+	}
+
+	if err := w.WALCheckpointTruncate(); err == nil {
+		t.Fatal("expected busy error from WALCheckpointTruncate with an open reader")
+	} else if !strings.Contains(err.Error(), "checkpoint blocked") {
+		t.Errorf("error = %v, want mention of \"checkpoint blocked\"", err)
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback reader tx: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("Close reader: %v", err)
+	}
+	if err := w.WALCheckpointTruncate(); err != nil {
+		t.Errorf("WALCheckpointTruncate after reader closed: %v", err)
 	}
 }

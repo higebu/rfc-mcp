@@ -163,6 +163,24 @@ func removeWorkingCopy(path string) {
 	_ = os.Remove(path + "-shm")
 }
 
+// finalizeWorkingCopy makes update's working copy self-contained before it
+// is renamed over the live database: the WAL is checkpointed (TRUNCATE) into
+// the main file, the handle is closed, and only then are the -wal/-shm
+// sidecars removed. Any failure is returned before the sidecars are touched,
+// so the caller can abort with the old database still live.
+func finalizeWorkingCopy(d *db.DB, path string) error {
+	if err := d.WALCheckpointTruncate(); err != nil {
+		_ = d.Close()
+		return fmt.Errorf("checkpoint working copy: %w", err)
+	}
+	if err := d.Close(); err != nil {
+		return fmt.Errorf("close working copy: %w", err)
+	}
+	_ = os.Remove(path + "-wal")
+	_ = os.Remove(path + "-shm")
+	return nil
+}
+
 // cmdUpdate refreshes an existing database in place: it works on a VACUUM
 // INTO'd copy so the live database (which serve may be reading concurrently)
 // is never mutated mid-update, then atomically renames the copy over the
@@ -222,20 +240,12 @@ func cmdUpdate(args []string) {
 		log.Fatalf("Update failed: %v", err)
 	}
 
-	// Checkpoint WAL into the main file so the renamed DB is self-contained.
-	// Only remove the -wal/-shm sidecars once the checkpoint and close are
-	// confirmed; on failure abort before the rename so the old DB stays live.
-	if err := d.WALCheckpointTruncate(); err != nil {
-		_ = d.Close()
+	// Checkpoint WAL into the main file so the renamed DB is self-contained;
+	// on failure abort before the rename so the old DB stays live.
+	if err := finalizeWorkingCopy(d, newPath); err != nil {
 		removeWorkingCopy(newPath)
-		log.Fatalf("Failed to checkpoint working copy: %v", err)
+		log.Fatalf("Failed to finalize working copy: %v", err)
 	}
-	if err := d.Close(); err != nil {
-		removeWorkingCopy(newPath)
-		log.Fatalf("Failed to close working copy: %v", err)
-	}
-	_ = os.Remove(newPath + "-wal")
-	_ = os.Remove(newPath + "-shm")
 
 	// Same-directory rename is atomic: the served DB path always resolves to
 	// either the fully-old or fully-new file, never a partial write.
