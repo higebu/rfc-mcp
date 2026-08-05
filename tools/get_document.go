@@ -10,7 +10,7 @@ import (
 
 type GetDocumentInput struct {
 	RFC      int `json:"rfc" jsonschema:"required,RFC number (e.g. 4271)"`
-	Offset   int `json:"offset,omitempty" jsonschema:"Start line number (0-based, default: 0)"`
+	Offset   int `json:"offset,omitempty" jsonschema:"Start line number (0-based, default: 0; negative values are treated as 0)"`
 	MaxLines int `json:"max_lines,omitempty" jsonschema:"Maximum number of lines to return (default: 200, 0 = all)"`
 	MaxChars int `json:"max_chars,omitempty" jsonschema:"Maximum number of characters to return (can be combined with max_lines)"`
 }

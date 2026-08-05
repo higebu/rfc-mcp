@@ -46,6 +46,12 @@ func paginateText(content string, offset, maxLines, maxChars int) *mcp.CallToolR
 	if maxLines <= 0 {
 		maxLines = defaultMaxLines
 	}
+	// Clamp before computing end: offset and maxLines come from MCP tool
+	// input, and offset+maxLines with maxLines near math.MaxInt would wrap
+	// negative and panic on the slice index below.
+	if maxLines > totalLines {
+		maxLines = totalLines
+	}
 
 	if offset >= totalLines {
 		return textResult(fmt.Sprintf("[No content at offset %d. Total lines: %d]", offset, totalLines))
