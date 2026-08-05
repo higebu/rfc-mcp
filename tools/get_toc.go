@@ -25,11 +25,11 @@ func HandleGetTOC(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, 
 
 		sections, err := d.GetTOC(input.RFC)
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to get TOC: %v", err)), nil, nil
+			return internalError(fmt.Sprintf("failed to get TOC for RFC %d", input.RFC), err)
 		}
 
 		if len(sections) == 0 {
-			return errorResult(rfcNotFoundError(d, input.RFC)), nil, nil
+			return rfcNotFoundResult(d, input.RFC)
 		}
 
 		header := fmt.Sprintf("# RFC %d - Table of Contents\n\n", input.RFC)
