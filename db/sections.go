@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -64,6 +65,13 @@ func (d *DB) InsertRFCWithSections(rfc RFC, sections []Section) error {
 	defer insStmt.Close()
 
 	for _, s := range sections {
+		// The delete above is scoped to rfc.Number: a section row carrying a
+		// different RFC number would be inserted without its stale
+		// predecessors ever being cleared (and would corrupt another RFC's
+		// section set), so require agreement.
+		if s.RFC != rfc.Number {
+			return fmt.Errorf("section %q: rfc number %d does not match inserted rfc %d", s.Number, s.RFC, rfc.Number)
+		}
 		if _, err = insStmt.Exec(s.RFC, s.Number, s.Title, s.Level, s.ParentNumber, s.Content); err != nil {
 			return fmt.Errorf("insert section: %w", err)
 		}
@@ -83,7 +91,7 @@ func (d *DB) GetTOC(rfc int) ([]Section, error) {
 	}
 	defer rows.Close()
 
-	var sections []Section
+	sections := []Section{} // non-nil so an empty result serializes as [], not null
 	for rows.Next() {
 		var s Section
 		if err := rows.Scan(&s.RFC, &s.Number, &s.Title, &s.Level, &s.ParentNumber); err != nil {
@@ -145,6 +153,18 @@ func (d *DB) GetSection(rfc int, number string, includeSubsections bool) ([]Sect
 	var err error
 
 	if includeSubsections {
+		// descendantsCTE anchors on the literal requested number, so without
+		// this check a nonexistent section could still return "descendants"
+		// (rows whose parent_number happens to equal the requested number).
+		// Require the anchor row itself to exist first.
+		var one int
+		err = d.conn.QueryRow("SELECT 1 FROM sections WHERE rfc = ? AND number = ?", rfc, number).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			return []Section{}, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get section: check existence: %w", err)
+		}
 		rows, err = d.conn.Query(
 			descendantsCTE+"SELECT rfc, number, title, level, COALESCE(parent_number, ''), content FROM sections WHERE rfc = ? AND number IN (SELECT number FROM descendants) ORDER BY id",
 			number, rfc, rfc,
@@ -160,7 +180,7 @@ func (d *DB) GetSection(rfc int, number string, includeSubsections bool) ([]Sect
 	}
 	defer rows.Close()
 
-	var sections []Section
+	sections := []Section{} // non-nil so an empty result serializes as [], not null
 	for rows.Next() {
 		var s Section
 		if err := rows.Scan(&s.RFC, &s.Number, &s.Title, &s.Level, &s.ParentNumber, &s.Content); err != nil {
@@ -239,7 +259,7 @@ func (d *DB) GetChildren(rfc int, number string) ([]SectionChild, error) {
 	}
 	defer rows.Close()
 
-	var children []SectionChild
+	children := []SectionChild{} // non-nil so an empty result serializes as [], not null
 	for rows.Next() {
 		var c SectionChild
 		if err := rows.Scan(&c.Number, &c.Title); err != nil {
@@ -284,7 +304,7 @@ func (d *DB) GetDescendantsByPrefix(rfc int, number string) ([]SectionChild, err
 	}
 	defer rows.Close()
 
-	var children []SectionChild
+	children := []SectionChild{} // non-nil so an empty result serializes as [], not null
 	for rows.Next() {
 		var c SectionChild
 		if err := rows.Scan(&c.Number, &c.Title); err != nil {

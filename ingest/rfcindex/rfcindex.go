@@ -73,9 +73,13 @@ type notIssuedEntry struct {
 //
 // It streams the document with an xml.Decoder token loop rather than
 // unmarshaling the whole 13+ MB file into memory at once. A malformed
-// individual entry is logged and skipped rather than aborting the parse;
-// the returned error, built with errors.Join, is nil unless at least one
-// entry was skipped or the underlying XML stream itself was truncated.
+// individual entry is logged and skipped rather than aborting the parse:
+// every successfully decoded entry is still returned even when the error
+// (built with errors.Join from the per-entry failures, plus any truncation
+// of the XML stream itself) is non-nil. Callers that can tolerate a few
+// skipped entries should treat a non-nil error accompanied by entries as a
+// warning and proceed with the entries; a non-nil error with zero entries
+// means the stream itself is broken and is fatal (see ingest/pipeline).
 func Parse(r io.Reader) ([]db.RFC, error) {
 	dec := xml.NewDecoder(r)
 	var rfcs []db.RFC

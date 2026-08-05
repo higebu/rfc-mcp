@@ -159,8 +159,15 @@ func ExtractReferences(sourceRFC int, sectionNumber, content string, bracketMap 
 	return refs
 }
 
-// InsertReferences bulk-inserts reference rows, replacing any existing row
-// with the same (source_rfc, source_section, target_rfc, target_section) key.
+// InsertReferences bulk-inserts reference rows. Before inserting, every
+// existing row belonging to a source RFC present in refs is deleted within
+// the same transaction (mirroring InsertRFCWithSections' delete-then-insert
+// strategy for sections), so a re-import that yields fewer references leaves
+// no stale rows behind.
+//
+// An empty refs set is a no-op: with no rows there is no source RFC to scope
+// a delete to. A re-parse that finds no references at all must instead clear
+// the old rows explicitly via DeleteReferencesForRFC.
 func (d *DB) InsertReferences(refs []Reference) error {
 	if len(refs) == 0 {
 		return nil
@@ -170,6 +177,19 @@ func (d *DB) InsertReferences(refs []Reference) error {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback() // no-op after Commit per database/sql docs
+
+	// Delete existing rows for each distinct source RFC being re-inserted,
+	// in first-seen order for determinism.
+	seen := make(map[int]bool)
+	for _, r := range refs {
+		if seen[r.SourceRFC] {
+			continue
+		}
+		seen[r.SourceRFC] = true
+		if _, err := tx.Exec("DELETE FROM rfc_references WHERE source_rfc = ?", r.SourceRFC); err != nil {
+			return fmt.Errorf("delete existing references for rfc %d: %w", r.SourceRFC, err)
+		}
+	}
 
 	stmt, err := tx.Prepare(
 		"INSERT OR REPLACE INTO rfc_references (source_rfc, source_section, target_rfc, target_section, context) VALUES (?, ?, ?, ?, ?)",
@@ -187,6 +207,17 @@ func (d *DB) InsertReferences(refs []Reference) error {
 	return tx.Commit()
 }
 
+// DeleteReferencesForRFC removes every stored reference originating from
+// sourceRFC. Intended for re-imports whose re-parse yields no references at
+// all: InsertReferences with an empty set is a no-op (it has no source RFC
+// to scope a delete to), so old rows must be cleared explicitly.
+func (d *DB) DeleteReferencesForRFC(sourceRFC int) error {
+	if _, err := d.conn.Exec("DELETE FROM rfc_references WHERE source_rfc = ?", sourceRFC); err != nil {
+		return fmt.Errorf("delete references for rfc %d: %w", sourceRFC, err)
+	}
+	return nil
+}
+
 // extractContext returns a snippet of content around the match [start, end),
 // snapping to word boundaries to avoid splitting words or multi-byte characters.
 func extractContext(content string, start, end int) string {
@@ -199,7 +230,10 @@ func extractContext(content string, start, end int) string {
 	}
 
 	ctxEnd := min(end+window, len(content))
-	if ctxEnd < len(content) {
+	// Snap back to a word boundary only when the cut actually lands
+	// mid-word: a window edge that falls exactly on a space already ends on
+	// a complete word, and snapping anyway would drop that trailing word.
+	if ctxEnd < len(content) && content[ctxEnd] != ' ' {
 		if idx := strings.LastIndexByte(content[end:ctxEnd], ' '); idx >= 0 {
 			ctxEnd = end + idx
 		}
@@ -280,7 +314,7 @@ func (d *DB) queryReferences(query string, args []any) ([]Reference, error) {
 	}
 	defer rows.Close()
 
-	var refs []Reference
+	refs := []Reference{} // non-nil so an empty result serializes as [], not null
 	for rows.Next() {
 		var r Reference
 		if err := rows.Scan(&r.SourceRFC, &r.SourceSection, &r.TargetRFC, &r.TargetSection, &r.Context, &r.TargetTitle); err != nil {

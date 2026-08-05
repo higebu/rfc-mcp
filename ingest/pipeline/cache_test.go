@@ -29,6 +29,32 @@ func TestCacheDir(t *testing.T) {
 	}
 }
 
+// TestLoadCache_EmptyFile: a zero-byte cache file (e.g. a botched write) is
+// a miss, not a hit -- otherwise the pipeline would parse empty data instead
+// of falling through to a live fetch (issue #10).
+func TestLoadCache_EmptyFile(t *testing.T) {
+	dir := withTempCacheDir(t)
+
+	cacheSubdir := filepath.Join(dir, "rfc-mcp")
+	if err := os.MkdirAll(cacheSubdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheSubdir, "test.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	data, mtime, err := loadCache("test.txt", time.Hour)
+	if err != nil {
+		t.Fatalf("loadCache: %v", err)
+	}
+	if data != nil {
+		t.Errorf("loadCache on empty file = %q, want nil (cache miss)", data)
+	}
+	if !mtime.IsZero() {
+		t.Errorf("loadCache mtime on empty file = %v, want zero", mtime)
+	}
+}
+
 func TestSaveAndLoadCache(t *testing.T) {
 	withTempCacheDir(t)
 
@@ -51,6 +77,26 @@ func TestSaveAndLoadCache(t *testing.T) {
 	}
 	if mtime.Before(before.Add(-time.Second)) {
 		t.Errorf("loadCache mtime = %v, want at or after %v", mtime, before)
+	}
+}
+
+// TestWriteFileAtomic_Mode: the temp file os.CreateTemp creates is 0600
+// and os.Rename preserves that, so writeFileAtomic must chmod to 0644
+// before the rename -- otherwise cached files silently become owner-only
+// readable, breaking shared cache/raw-dir setups.
+func TestWriteFileAtomic_Mode(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := writeFileAtomic(dir, "test.txt", []byte("hello")); err != nil {
+		t.Fatalf("writeFileAtomic: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(dir, "test.txt"))
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := info.Mode().Perm() & 0o777; got != 0o644 {
+		t.Errorf("file mode = %o, want 644", got)
 	}
 }
 

@@ -68,7 +68,9 @@ func fetchRFCText(ctx context.Context, client *http.Client, number int, rawDir, 
 	name := fmt.Sprintf("rfc%d.txt", number)
 
 	if rawDir != "" {
-		if data, err := os.ReadFile(filepath.Join(rawDir, name)); err == nil {
+		// A zero-byte file is a botched write, not a cached body (no RFC's
+		// plain text is empty): treat it as absent and re-fetch.
+		if data, err := os.ReadFile(filepath.Join(rawDir, name)); err == nil && len(data) > 0 {
 			return data, nil
 		}
 	}
@@ -82,7 +84,10 @@ func fetchRFCText(ctx context.Context, client *http.Client, number int, rawDir, 
 		if err := os.MkdirAll(rawDir, 0o755); err != nil {
 			return nil, fmt.Errorf("create raw dir: %w", err)
 		}
-		if err := os.WriteFile(filepath.Join(rawDir, name), data, 0o644); err != nil {
+		// Atomic write (temp file + rename): the read path above trusts any
+		// existing rfcN.txt forever, so a truncated partial write must never
+		// become visible at the final path.
+		if err := writeFileAtomic(rawDir, name, data); err != nil {
 			return nil, fmt.Errorf("write raw file: %w", err)
 		}
 	}
@@ -150,10 +155,18 @@ func httpGetOnce(ctx context.Context, client *http.Client, url string) ([]byte, 
 		return nil, err
 	}
 
-	// Detect truncation: if we can read one more byte, the response exceeded the cap.
+	// Detect truncation: if we can read one more byte, the response exceeded
+	// the cap. n == 0 with io.EOF (or nil) means the body really ended at or
+	// under the cap; any other error means the transfer itself broke mid-body
+	// (e.g. a connection cut short of the declared Content-Length), and the
+	// data read so far must not be passed off as the complete document.
 	var extra [1]byte
-	if n, _ := resp.Body.Read(extra[:]); n > 0 {
+	n, err := resp.Body.Read(extra[:])
+	if n > 0 {
 		return nil, fmt.Errorf("%s exceeds maximum size of %d MB", url, maxFetchSize>>20)
+	}
+	if err != nil && err != io.EOF {
+		return nil, fmt.Errorf("read %s: %w", url, err)
 	}
 	return data, nil
 }

@@ -94,8 +94,23 @@ func unmarshalInts(s string) []int {
 	return a
 }
 
+// validateRFC rejects structurally invalid RFC metadata before it can be
+// persisted: RFC numbers start at 1, and a page count can never be negative.
+func validateRFC(rfc RFC) error {
+	if rfc.Number <= 0 {
+		return fmt.Errorf("invalid rfc number %d: must be positive", rfc.Number)
+	}
+	if rfc.PageCount < 0 {
+		return fmt.Errorf("invalid page count %d for rfc %d: must not be negative", rfc.PageCount, rfc.Number)
+	}
+	return nil
+}
+
 // UpsertRFC inserts or replaces an RFC metadata record.
 func (d *DB) UpsertRFC(rfc RFC) error {
+	if err := validateRFC(rfc); err != nil {
+		return err
+	}
 	_, err := d.conn.Exec(
 		`INSERT OR REPLACE INTO rfcs (
 			number, title, status, stream, date, page_count, authors, keywords,
@@ -199,7 +214,7 @@ func (d *DB) ListRFCs(query, stream, status, wg string, limit, offset int) (*Lis
 	}
 	defer rows.Close()
 
-	var rfcs []RFCSummary
+	rfcs := []RFCSummary{} // non-nil so an empty result serializes as [], not null
 	for rows.Next() {
 		var r RFCSummary
 		if err := rows.Scan(&r.Number, &r.Title, &r.Status, &r.Stream, &r.Date, &r.WG); err != nil {

@@ -42,7 +42,11 @@ func iprFetchError(label string, err error) string {
 func HandleGetIPR(client *http.Client) func(ctx context.Context, req *mcp.CallToolRequest, input GetIPRInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input GetIPRInput) (*mcp.CallToolResult, any, error) {
 		switch {
-		case input.RFC <= 0 && input.Name == "":
+		case input.RFC < 0:
+			// Reject explicitly rather than silently ignoring a negative
+			// rfc when name is also present.
+			return errorResult("rfc must be a positive RFC number"), nil, nil
+		case input.RFC == 0 && input.Name == "":
 			return errorResult("rfc or name is required"), nil, nil
 		case input.RFC > 0 && input.Name != "":
 			return errorResult("specify only one of rfc or name"), nil, nil
@@ -65,7 +69,7 @@ func HandleGetIPR(client *http.Client) func(ctx context.Context, req *mcp.CallTo
 
 		data, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to marshal: %v", err)), nil, nil
+			return internalError("failed to marshal result", err)
 		}
 
 		return textResult(string(data)), nil, nil
