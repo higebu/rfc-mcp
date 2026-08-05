@@ -193,7 +193,12 @@ func validHeadingMatch(m []string) bool {
 // class column ("A   IN   A   26.3.0.103") keeps a heading-narrow gap
 // but is itself column-formatted: its rest carries internal runs of 2+
 // spaces, which real bare-letter heading titles ("Options Considered",
-// "RATIONALE FOR KEY DESIGN DECISIONS") never do.
+// "RATIONALE FOR KEY DESIGN DECISIONS") never do. That last check only
+// applies to the title portion: a 5+-space run may legitimately separate
+// the title from a same-line body continuation (the typewriter-era shape
+// splitHeadingGap recovers, cf. RFC 1035's section 6.4.1), so the rest
+// is split the same way resolveHeadingTitle will split it before the
+// internal-double-space rejection is applied.
 func validBareLetterMatch(m []string) bool {
 	token := m[1]
 	if len(token) != 1 || token[0] < 'A' || token[0] > 'Z' {
@@ -206,7 +211,11 @@ func validBareLetterMatch(m []string) bool {
 	if gap := len(m[0]) - len(token) - len(rest); gap > 3 {
 		return false
 	}
-	return !strings.Contains(strings.TrimRight(rest, " \t"), "  ")
+	title := rest
+	if short, _, split := splitHeadingGap(rest); split {
+		title = short
+	}
+	return !strings.Contains(strings.TrimRight(title, " \t"), "  ")
 }
 
 // validWideGapDecimalMatch guards the widened number-to-title gap

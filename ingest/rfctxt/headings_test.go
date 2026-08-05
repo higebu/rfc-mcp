@@ -72,6 +72,12 @@ func TestIsHeadingLineBareLetterDisambiguation(t *testing.T) {
 		// but the rest is itself column-aligned (internal 2+-space runs),
 		// which real bare-letter heading titles never are.
 		{"zone-file row with class column", "A   IN   A   26.3.0.103", false},
+		// The internal-double-space rejection applies to the title
+		// portion only: a single 5+-space run separating the title from
+		// a same-line body continuation is splitHeadingGap's shape and
+		// must not disqualify the heading.
+		{"bare letter heading with wide-gap body continuation", "A   Options Considered          Inverse queries take the form", true},
+		{"dotted letter heading with wide-gap body continuation", "A. Some Title          continuation text", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
