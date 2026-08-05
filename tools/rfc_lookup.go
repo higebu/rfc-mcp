@@ -4,11 +4,40 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/higebu/rfc-mcp/db"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// maxRFCNumbers caches maxRFCNumber's answer per database handle. The
+// content of an open database never changes while it's being served, so
+// the lookup is worth doing once per handle, not on every not-found error.
+var maxRFCNumbers sync.Map // *db.DB -> int
+
+// maxRFCNumber returns the highest currently issued RFC number. The db
+// layer exposes no MAX(number) query, so this pages ListRFCs (ordered by
+// number ascending) to its last row with two LIMIT-1 queries instead of
+// materializing the whole corpus; the answer is then cached for the
+// handle's lifetime. Lookup failures are not cached, so a transient error
+// doesn't pin a missing hint.
+func maxRFCNumber(d *db.DB) (int, bool) {
+	if v, ok := maxRFCNumbers.Load(d); ok {
+		return v.(int), true
+	}
+	first, err := d.ListRFCs("", "", "", "", 1, 0)
+	if err != nil || first.TotalCount == 0 {
+		return 0, false
+	}
+	last, err := d.ListRFCs("", "", "", "", 1, first.TotalCount-1)
+	if err != nil || len(last.RFCs) == 0 {
+		return 0, false
+	}
+	n := last.RFCs[len(last.RFCs)-1].Number
+	maxRFCNumbers.Store(d, n)
+	return n, true
+}
 
 // rfcRangeHint returns a suffix naming the highest currently issued RFC
 // number (e.g. " (valid RFC numbers range from 1 to 9793)"), extended with
@@ -16,11 +45,10 @@ import (
 // range from 1 to 9793; database built 2026-07-12)"), or "" if the RFC
 // lookup itself fails.
 func rfcRangeHint(d *db.DB) string {
-	result, err := d.ListRFCs("", "", "", "", -1, 0)
-	if err != nil || len(result.RFCs) == 0 {
+	maxNumber, ok := maxRFCNumber(d)
+	if !ok {
 		return ""
 	}
-	maxNumber := result.RFCs[len(result.RFCs)-1].Number
 
 	var built string
 	if builtAt, ok := d.GetMeta("built_at"); ok {

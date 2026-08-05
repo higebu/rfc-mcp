@@ -15,7 +15,7 @@ type GetSectionInput struct {
 	IncludeSubsections bool   `json:"include_subsections,omitempty" jsonschema:"Include all subsections (default: false)"`
 	Offset             int    `json:"offset,omitempty" jsonschema:"Start line number (0-based, default: 0; negative values are treated as 0)"`
 	MaxLines           int    `json:"max_lines,omitempty" jsonschema:"Maximum number of lines to return (default: 200; 0 or omitted uses the default; use offset to page through longer content)"`
-	MaxChars           int    `json:"max_chars,omitempty" jsonschema:"Maximum number of characters to return (can be combined with max_lines)"`
+	MaxChars           int    `json:"max_chars,omitempty" jsonschema:"Maximum content size to return, counted in UTF-8 bytes (can be combined with max_lines; a single line longer than this is returned whole so pagination can progress)"`
 }
 
 var GetSectionTool = &mcp.Tool{

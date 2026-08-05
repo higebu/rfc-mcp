@@ -50,6 +50,13 @@ func HandleSearch(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, 
 		if len(rfcs) == 0 && input.RFC != 0 {
 			rfcs = []int{input.RFC}
 		}
+		// Reject non-positive RFC numbers instead of silently binding
+		// them into the IN(...) filter, where they can never match.
+		for _, n := range rfcs {
+			if n <= 0 {
+				return errorResult(fmt.Sprintf("invalid RFC number %d in rfc/rfcs filter; RFC numbers must be positive", n)), nil, nil
+			}
+		}
 
 		results, err := d.Search(input.Query, rfcs, limit)
 		if err != nil {

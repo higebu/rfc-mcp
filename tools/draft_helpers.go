@@ -13,20 +13,23 @@ import (
 	"github.com/higebu/rfc-mcp/ingest/rfctxt"
 )
 
-// draftRevisionRE matches a trailing two-digit revision suffix on a draft
-// name, e.g. "draft-ietf-quic-transport-34" -> base
-// "draft-ietf-quic-transport", rev "34". IETF naming convention never ends
-// a draft's meaningful name in a bare two-digit number outside this
-// suffix, so the split is unambiguous.
-var draftRevisionRE = regexp.MustCompile(`^(.+)-(\d{2})$`)
+// draftRevisionRE matches a trailing one- or two-digit revision suffix on
+// a draft name, e.g. "draft-ietf-quic-transport-34" -> base
+// "draft-ietf-quic-transport", rev "34", or "draft-foo-3" -> base
+// "draft-foo", rev "3". IETF naming convention never ends a draft's
+// meaningful name in a bare one- or two-digit number outside this suffix,
+// so the split is unambiguous; a longer digit run (e.g. "-2029") is part
+// of the name and doesn't match.
+var draftRevisionRE = regexp.MustCompile(`^(.+)-(\d{1,2})$`)
 
 // splitDraftName splits name into its base draft name and an embedded
 // revision, if the caller wrote one directly onto the name (e.g.
-// "draft-foo-bar-03"). Returns rev == "" when name carries no revision
-// suffix of its own.
+// "draft-foo-bar-03", or "draft-foo-bar-3" without the leading zero). The
+// returned rev is normalized to the Datatracker's two-digit convention.
+// Returns rev == "" when name carries no revision suffix of its own.
 func splitDraftName(name string) (base, rev string) {
 	if m := draftRevisionRE.FindStringSubmatch(name); m != nil {
-		return m[1], m[2]
+		return m[1], normalizeRevision(m[2])
 	}
 	return name, ""
 }

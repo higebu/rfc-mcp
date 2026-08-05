@@ -81,7 +81,8 @@ func HandleGetErrata(d *db.DB) func(ctx context.Context, req *mcp.CallToolReques
 // filter: errata.json is inconsistent about a trailing "." on section
 // numbers for the same document (e.g. "3.3.2." vs "3.3.1"), so an exact
 // string match would silently miss entries depending on which form the
-// caller passes.
+// caller passes. Trailing dots and spaces are trimmed together so mixed
+// suffixes like "3.1 ." normalize to "3.1" too.
 func normalizeErrataSection(s string) string {
-	return strings.TrimRight(strings.TrimSpace(s), ".")
+	return strings.TrimRight(strings.TrimSpace(s), ". \t")
 }
