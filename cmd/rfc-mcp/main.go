@@ -30,6 +30,21 @@ Commands: serve, build, download, import, import-dir, update, completion`
 // subcommand that takes a -db flag (serve, build, update, import, import-dir).
 const defaultDBPath = "data/rfc.db"
 
+// newHTTPServer wraps handler in an http.Server with explicit limits so a
+// client cannot hold a connection open indefinitely while trickling request
+// headers (slowloris). ReadTimeout/WriteTimeout are deliberately left unset:
+// MCP streamable HTTP responses can be long-lived streams, and those timeouts
+// would cut them off.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MiB
+	}
+}
+
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -470,7 +485,8 @@ func cmdServe(args []string) {
 		mux.HandleFunc("/health", healthHandler)
 		mux.Handle("/", mcpH)
 		log.Printf("Starting rfc-mcp server on %s (HTTP)...", *addr)
-		if err := http.ListenAndServe(*addr, mux); err != nil {
+		srv := newHTTPServer(*addr, mux)
+		if err := srv.ListenAndServe(); err != nil {
 			log.Fatalf("Server error: %v", err)
 		}
 	default:
