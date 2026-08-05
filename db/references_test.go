@@ -77,9 +77,85 @@ func TestInsertReferences(t *testing.T) {
 		t.Fatalf("expected replaced context, got %+v", got)
 	}
 
-	// Empty input is a no-op, not an error.
+	// Empty input is a no-op, not an error -- and must not delete anything.
 	if err := d.InsertReferences(nil); err != nil {
 		t.Errorf("InsertReferences(nil) should be a no-op, got error: %v", err)
+	}
+	got, err = d.GetReferences(2119, "1", DirectionOutgoing, false)
+	if err != nil {
+		t.Fatalf("GetReferences (after empty insert): %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected the existing reference to survive an empty insert, got %+v", got)
+	}
+}
+
+// TestInsertReferences_ReimportDropsStaleRows covers issue #12: a re-import
+// whose re-parse yields fewer (or different) references must remove the rows
+// the previous import stored, not leave them behind alongside the new set.
+func TestInsertReferences_ReimportDropsStaleRows(t *testing.T) {
+	d := setupTestDB(t)
+
+	// Seed data has 2 references from RFC 4271 section 5.1 (to 9293 and 793).
+	// Re-import with a single, different reference from a different section.
+	refs := []Reference{
+		{SourceRFC: 4271, SourceSection: "5", TargetRFC: 1771, TargetSection: "", Context: "...obsoletes RFC 1771..."},
+	}
+	if err := d.InsertReferences(refs); err != nil {
+		t.Fatalf("InsertReferences: %v", err)
+	}
+
+	all, err := d.queryReferences(
+		refBaseQuery+" WHERE r.source_rfc = ? ORDER BY r.source_section, r.target_rfc", []any{4271},
+	)
+	if err != nil {
+		t.Fatalf("query all references for 4271: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected exactly 1 reference after re-import, got %d: %+v", len(all), all)
+	}
+	if all[0].TargetRFC != 1771 || all[0].SourceSection != "5" {
+		t.Fatalf("expected only the re-imported reference to remain, got %+v", all[0])
+	}
+
+	// References from other source RFCs must be untouched: seed a row for
+	// another RFC and confirm a 4271 re-import leaves it alone.
+	if err := d.InsertReferences([]Reference{
+		{SourceRFC: 9293, SourceSection: "3.1", TargetRFC: 793, Context: "...RFC 793..."},
+	}); err != nil {
+		t.Fatalf("InsertReferences (9293): %v", err)
+	}
+	if err := d.InsertReferences(refs); err != nil {
+		t.Fatalf("InsertReferences (4271 again): %v", err)
+	}
+	other, err := d.GetReferences(9293, "3.1", DirectionOutgoing, false)
+	if err != nil {
+		t.Fatalf("GetReferences (9293): %v", err)
+	}
+	if len(other) != 1 {
+		t.Fatalf("expected the 9293 reference to survive a 4271 re-import, got %+v", other)
+	}
+}
+
+// TestDeleteReferencesForRFC covers the explicit clear used when a re-parse
+// finds no references at all (InsertReferences with an empty set is a no-op).
+func TestDeleteReferencesForRFC(t *testing.T) {
+	d := setupTestDB(t)
+
+	if err := d.DeleteReferencesForRFC(4271); err != nil {
+		t.Fatalf("DeleteReferencesForRFC: %v", err)
+	}
+	got, err := d.GetReferences(4271, "5.1", DirectionOutgoing, false)
+	if err != nil {
+		t.Fatalf("GetReferences: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected 0 references after delete, got %+v", got)
+	}
+
+	// Deleting for an RFC with no rows is a no-op success.
+	if err := d.DeleteReferencesForRFC(424242); err != nil {
+		t.Errorf("DeleteReferencesForRFC on absent rfc: %v", err)
 	}
 }
 
