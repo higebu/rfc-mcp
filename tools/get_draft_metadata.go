@@ -71,7 +71,7 @@ func HandleGetDraftMetadata(client *http.Client) func(ctx context.Context, req *
 
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to marshal: %v", err)), nil, nil
+			return internalError("failed to marshal result", err)
 		}
 
 		return textResult(string(data)), nil, nil

@@ -46,7 +46,7 @@ func HandleGetReferences(d *db.DB) func(ctx context.Context, req *mcp.CallToolRe
 
 		refs, err := d.GetReferences(input.RFC, input.SectionNumber, direction, input.IncludeSubsections)
 		if err != nil {
-			return errorResult(fmt.Sprintf("get references failed: %v", err)), nil, nil
+			return internalError(fmt.Sprintf("failed to get references for RFC %d", input.RFC), err)
 		}
 
 		if len(refs) == 0 {
@@ -55,7 +55,7 @@ func HandleGetReferences(d *db.DB) func(ctx context.Context, req *mcp.CallToolRe
 
 		data, err := json.MarshalIndent(refs, "", "  ")
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to marshal: %v", err)), nil, nil
+			return internalError("failed to marshal result", err)
 		}
 
 		return textResult(string(data)), nil, nil

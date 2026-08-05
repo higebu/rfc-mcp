@@ -72,6 +72,32 @@ func TestUpsertRFC_And_GetRFCMetadata(t *testing.T) {
 	}
 }
 
+// TestUpsertRFC_InvalidInput covers the structural validation added for
+// issue #24: nonpositive RFC numbers and negative page counts are rejected.
+func TestUpsertRFC_InvalidInput(t *testing.T) {
+	d := setupTestDB(t)
+
+	for _, tt := range []struct {
+		name string
+		rfc  RFC
+	}{
+		{"zero number", RFC{Number: 0, Title: "Zero"}},
+		{"negative number", RFC{Number: -7, Title: "Negative"}},
+		{"negative page count", RFC{Number: 100, Title: "Pages", PageCount: -1}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := d.UpsertRFC(tt.rfc); err == nil {
+				t.Errorf("UpsertRFC(%+v): expected error, got nil", tt.rfc)
+			}
+		})
+	}
+
+	// Zero page count is legitimate (unknown) and must still be accepted.
+	if err := d.UpsertRFC(RFC{Number: 100, Title: "OK", PageCount: 0}); err != nil {
+		t.Errorf("UpsertRFC with zero page count: %v", err)
+	}
+}
+
 func TestListRFCs(t *testing.T) {
 	d := setupTestDB(t)
 

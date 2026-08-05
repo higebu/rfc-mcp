@@ -25,6 +25,21 @@ INSERT INTO rfcs (number, title, status, stream, date, page_count, authors, keyw
      'idr', 'rtg', '10.17487/RFC4271', '', '[1771]', '[]', '[]', '[]', '[]', 0),
     (9999, '', '', '', '', 0, '[]', '[]', '', '', '', '', '', '[]', '[]', '[]', '[]', '[]', 1);
 
+-- Fixture parent rows for tests that insert ad-hoc sections rows directly
+-- (PRAGMA foreign_keys=ON makes sections.rfc REFERENCES rfcs(number)
+-- enforced, so every fixture section needs a parent rfcs row). not_issued=1
+-- keeps them out of ListRFCs results and totals.
+INSERT INTO rfcs (number, title, not_issued) VALUES
+    (8000, 'Test Fixture 8000', 1),
+    (8100, 'Test Fixture 8100', 1),
+    (8200, 'Test Fixture 8200', 1),
+    (8300, 'Test Fixture 8300', 1),
+    (8301, 'Test Fixture 8301', 1),
+    (8400, 'Test Fixture 8400', 1),
+    (8401, 'Test Fixture 8401', 1),
+    (8500, 'Test Fixture 8500', 1),
+    (8501, 'Test Fixture 8501', 1);
+
 INSERT INTO sections (rfc, number, title, level, parent_number, content) VALUES
     (9293, '1', 'Introduction', 1, NULL,
      '# 1 Introduction
@@ -137,6 +152,74 @@ func TestOpen_ReadOnly(t *testing.T) {
 	}
 }
 
+// TestOpen_PathWithSpecialChars verifies Open's file: URI construction
+// percent-encodes characters that would otherwise mis-parse as the URI query
+// string ('?'), fragment ('#'), or an escape sequence ('%') -- and that
+// mode=ro still survives the encoding.
+func TestOpen_PathWithSpecialChars(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "we?ird %40 #dir")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	dbPath := filepath.Join(dir, "odd?na%me#.db")
+
+	rw, err := OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadWrite: %v", err)
+	}
+	if err := rw.InitSchema(); err != nil {
+		t.Fatalf("InitSchema: %v", err)
+	}
+	if err := rw.UpsertRFC(RFC{Number: 793, Title: "TCP"}); err != nil {
+		t.Fatalf("UpsertRFC: %v", err)
+	}
+	rw.Close()
+
+	ro, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open with special chars in path: %v", err)
+	}
+	defer ro.Close()
+
+	result, err := ro.ListRFCs("", "", "", "", 0, 0)
+	if err != nil {
+		t.Fatalf("ListRFCs: %v", err)
+	}
+	if len(result.RFCs) != 1 || result.RFCs[0].Number != 793 {
+		t.Errorf("expected RFC 793, got %+v", result.RFCs)
+	}
+
+	// mode=ro must survive the path encoding: writes fail.
+	if err := ro.Exec("DELETE FROM rfcs"); err == nil {
+		t.Error("expected write to fail on a read-only handle")
+	}
+}
+
+// TestOpenReadWrite_ForeignKeysEnforced verifies foreign-key enforcement is
+// active on read-write handles: a sections row referencing a nonexistent RFC
+// must be rejected. The pragma travels in the DSN (_pragma=foreign_keys(1)),
+// so it applies to every connection the pool opens, not just the one that
+// happened to serve a one-shot Exec.
+func TestOpenReadWrite_ForeignKeysEnforced(t *testing.T) {
+	d := setupTestDB(t)
+
+	var fk int
+	if err := d.conn.QueryRow("PRAGMA foreign_keys").Scan(&fk); err != nil {
+		t.Fatalf("query PRAGMA foreign_keys: %v", err)
+	}
+	if fk != 1 {
+		t.Errorf("PRAGMA foreign_keys = %d, want 1", fk)
+	}
+
+	err := d.Exec(
+		"INSERT INTO sections (rfc, number, title, level, content) VALUES (?, ?, ?, ?, ?)",
+		424242, "1", "Ghost", 1, "dangling parent",
+	)
+	if err == nil {
+		t.Error("expected FK violation inserting a section for a nonexistent RFC")
+	}
+}
+
 // TestExec_DirectSQL covers the exported Exec helper used for ad-hoc writes.
 func TestExec_DirectSQL(t *testing.T) {
 	d := setupTestDB(t)
@@ -164,6 +247,41 @@ func TestExec_DirectSQL(t *testing.T) {
 
 	if err := d.Exec("NOT VALID SQL"); err == nil {
 		t.Error("expected error for invalid SQL")
+	}
+}
+
+// TestEmptyResultsAreNonNilSlices verifies every list-returning query helper
+// yields an empty non-nil slice when nothing matches, so MCP tool responses
+// serialize as [] rather than null.
+func TestEmptyResultsAreNonNilSlices(t *testing.T) {
+	d := setupTestDB(t)
+
+	if items, err := d.GetErrataByRFC(77777); err != nil || items == nil {
+		t.Errorf("GetErrataByRFC empty = (%v, %v), want non-nil slice", items, err)
+	}
+	if result, err := d.ListRFCs("zzz-no-such-title", "", "", "", 0, 0); err != nil || result.RFCs == nil {
+		t.Errorf("ListRFCs empty: err=%v, RFCs nil=%v, want non-nil slice", err, result == nil || result.RFCs == nil)
+	}
+	if refs, err := d.GetReferences(77777, "", DirectionIncoming, false); err != nil || refs == nil {
+		t.Errorf("GetReferences empty = (%v, %v), want non-nil slice", refs, err)
+	}
+	if results, err := d.Search("xyznonexistent", nil, 10); err != nil || results == nil {
+		t.Errorf("Search empty = (%v, %v), want non-nil slice", results, err)
+	}
+	if toc, err := d.GetTOC(77777); err != nil || toc == nil {
+		t.Errorf("GetTOC empty = (%v, %v), want non-nil slice", toc, err)
+	}
+	if secs, err := d.GetSection(9293, "no-such-section", false); err != nil || secs == nil {
+		t.Errorf("GetSection empty = (%v, %v), want non-nil slice", secs, err)
+	}
+	if secs, err := d.GetSection(9293, "no-such-section", true); err != nil || secs == nil {
+		t.Errorf("GetSection empty (subsections) = (%v, %v), want non-nil slice", secs, err)
+	}
+	if children, err := d.GetChildren(9293, "no-such-section"); err != nil || children == nil {
+		t.Errorf("GetChildren empty = (%v, %v), want non-nil slice", children, err)
+	}
+	if children, err := d.GetDescendantsByPrefix(9293, "no-such-section"); err != nil || children == nil {
+		t.Errorf("GetDescendantsByPrefix empty = (%v, %v), want non-nil slice", children, err)
 	}
 }
 

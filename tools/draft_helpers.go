@@ -13,20 +13,23 @@ import (
 	"github.com/higebu/rfc-mcp/ingest/rfctxt"
 )
 
-// draftRevisionRE matches a trailing two-digit revision suffix on a draft
-// name, e.g. "draft-ietf-quic-transport-34" -> base
-// "draft-ietf-quic-transport", rev "34". IETF naming convention never ends
-// a draft's meaningful name in a bare two-digit number outside this
-// suffix, so the split is unambiguous.
-var draftRevisionRE = regexp.MustCompile(`^(.+)-(\d{2})$`)
+// draftRevisionRE matches a trailing one- or two-digit revision suffix on
+// a draft name, e.g. "draft-ietf-quic-transport-34" -> base
+// "draft-ietf-quic-transport", rev "34", or "draft-foo-3" -> base
+// "draft-foo", rev "3". IETF naming convention never ends a draft's
+// meaningful name in a bare one- or two-digit number outside this suffix,
+// so the split is unambiguous; a longer digit run (e.g. "-2029") is part
+// of the name and doesn't match.
+var draftRevisionRE = regexp.MustCompile(`^(.+)-(\d{1,2})$`)
 
 // splitDraftName splits name into its base draft name and an embedded
 // revision, if the caller wrote one directly onto the name (e.g.
-// "draft-foo-bar-03"). Returns rev == "" when name carries no revision
-// suffix of its own.
+// "draft-foo-bar-03", or "draft-foo-bar-3" without the leading zero). The
+// returned rev is normalized to the Datatracker's two-digit convention.
+// Returns rev == "" when name carries no revision suffix of its own.
 func splitDraftName(name string) (base, rev string) {
 	if m := draftRevisionRE.FindStringSubmatch(name); m != nil {
-		return m[1], m[2]
+		return m[1], normalizeRevision(m[2])
 	}
 	return name, ""
 }
@@ -69,16 +72,25 @@ func draftLabel(name, rev string) string {
 	return name + "-" + rev
 }
 
+// wrapDraftFetchError wraps a Datatracker/archive fetch failure with the
+// client-facing wording draft tools use, while preserving the error chain
+// so errors.Is(err, drafts.ErrNotFound) still works on the result. An
+// unknown draft/revision already names the attempted URL via
+// drafts.ErrNotFound and is passed through unchanged.
+func wrapDraftFetchError(label string, err error) error {
+	if errors.Is(err, drafts.ErrNotFound) {
+		// The error already reads "draft not found: <attempted URL>".
+		return err
+	}
+	return fmt.Errorf("failed to fetch draft %s: %w", label, err)
+}
+
 // draftFetchError formats a Datatracker/archive fetch failure for a draft
 // tool's error result, distinguishing an unknown draft/revision (which
 // already names the attempted URL, via drafts.ErrNotFound) from any other
 // network or server failure.
 func draftFetchError(label string, err error) string {
-	if errors.Is(err, drafts.ErrNotFound) {
-		// The error already reads "draft not found: <attempted URL>".
-		return err.Error()
-	}
-	return fmt.Sprintf("failed to fetch draft %s: %v", label, err)
+	return wrapDraftFetchError(label, err).Error()
 }
 
 // fetchAndParseDraft resolves name/revision, fetches the draft's plain-
@@ -88,13 +100,13 @@ func draftFetchError(label string, err error) string {
 func fetchAndParseDraft(ctx context.Context, client *http.Client, name, revision string) (label string, sections []db.Section, err error) {
 	base, rev, err := resolveDraftRevision(ctx, client, name, revision)
 	if err != nil {
-		return "", nil, errors.New(draftFetchError(base, err))
+		return "", nil, wrapDraftFetchError(base, err)
 	}
 	label = draftLabel(base, rev)
 
 	body, err := drafts.FetchText(ctx, client, base, rev)
 	if err != nil {
-		return "", nil, errors.New(draftFetchError(label, err))
+		return "", nil, wrapDraftFetchError(label, err)
 	}
 
 	parsed, err := rfctxt.ParseRFCText(body, 0, label)

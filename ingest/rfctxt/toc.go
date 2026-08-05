@@ -176,7 +176,13 @@ func findTOCBlock(lines []string) (headingIdx, start, end int, found bool) {
 		// followed by its first subsection with no prose in between. A
 		// line with any strippable page-number tail stays inside — it's
 		// a TOC entry whose page number is written with just one space
-		// (RFC 1305), not a body heading.
+		// (RFC 1305), not a body heading. So does a line whose title is
+		// column-aligned far from its numbering token (gap > 3): that's
+		// a trailer-less TOC entry lined up with its siblings' titles
+		// (RFC 2244's "C.       Full Copyright Statement"), not the
+		// narrow-gap body heading this pull-back exists to recover —
+		// without the gap cap, the blank-skipping walk-back would reach
+		// across the TOC's own end boundary and pull it out.
 		for range 2 {
 			j := end - 1
 			for j >= start && strings.TrimSpace(lines[j]) == "" {
@@ -189,6 +195,9 @@ func findTOCBlock(lines []string) (headingIdx, start, end int, found bool) {
 			trimmedPrev := strings.TrimSpace(prev)
 			if len(prev) != len(strings.TrimLeft(prev, " ")) || !isHeadingLine(prev) ||
 				stripTOCTrailer(trimmedPrev) != trimmedPrev {
+				break
+			}
+			if m := headingRE.FindStringSubmatch(prev); m != nil && len(m[0])-len(m[1])-len(m[2]) > 3 {
 				break
 			}
 			end = j
@@ -300,6 +309,18 @@ func detectTier2(lines []string, tocEnd int, entries []tocEntry) []rawHeading {
 			// flatten them to siblings with no parent link.
 			level = d
 		}
+		number := l.entry.number
+		if number == "" {
+			number = slugify(l.entry.title)
+		}
+		// The duplicate check must run before any stack manipulation: a
+		// stray duplicate of a shallow entry would otherwise pop the
+		// real parent frames on its way to being skipped, orphaning
+		// every deeper entry that follows it.
+		if seen[number] {
+			continue
+		}
+		seen[number] = true
 		for len(stack) > 0 && stack[len(stack)-1].level >= level {
 			stack = stack[:len(stack)-1]
 		}
@@ -307,14 +328,6 @@ func detectTier2(lines []string, tocEnd int, entries []tocEntry) []rawHeading {
 		if len(stack) > 0 {
 			parent = stack[len(stack)-1].number
 		}
-		number := l.entry.number
-		if number == "" {
-			number = slugify(l.entry.title)
-		}
-		if seen[number] {
-			continue
-		}
-		seen[number] = true
 		out = append(out, rawHeading{lineIdx: l.lineIdx, number: number, title: l.entry.title, level: level, parent: parent})
 		stack = append(stack, frame{level, number})
 	}

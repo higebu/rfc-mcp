@@ -10,9 +10,9 @@ import (
 
 type GetDocumentInput struct {
 	RFC      int `json:"rfc" jsonschema:"required,RFC number (e.g. 4271)"`
-	Offset   int `json:"offset,omitempty" jsonschema:"Start line number (0-based, default: 0)"`
-	MaxLines int `json:"max_lines,omitempty" jsonschema:"Maximum number of lines to return (default: 200, 0 = all)"`
-	MaxChars int `json:"max_chars,omitempty" jsonschema:"Maximum number of characters to return (can be combined with max_lines)"`
+	Offset   int `json:"offset,omitempty" jsonschema:"Start line number (0-based, default: 0; negative values are treated as 0)"`
+	MaxLines int `json:"max_lines,omitempty" jsonschema:"Maximum number of lines to return (default: 200; 0 or omitted uses the default; use offset to page through longer content)"`
+	MaxChars int `json:"max_chars,omitempty" jsonschema:"Maximum content size to return, counted in UTF-8 bytes (can be combined with max_lines; a single line longer than this is returned whole so pagination can progress)"`
 }
 
 var GetDocumentTool = &mcp.Tool{
@@ -29,10 +29,10 @@ func HandleGetDocument(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequ
 
 		doc, err := d.GetDocument(input.RFC)
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to get document: %v", err)), nil, nil
+			return internalError(fmt.Sprintf("failed to get document for RFC %d", input.RFC), err)
 		}
 		if doc == "" {
-			return errorResult(rfcNotFoundError(d, input.RFC)), nil, nil
+			return rfcNotFoundResult(d, input.RFC)
 		}
 
 		return paginateText(doc, input.Offset, input.MaxLines, input.MaxChars), nil, nil

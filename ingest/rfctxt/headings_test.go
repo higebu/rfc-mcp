@@ -63,6 +63,21 @@ func TestIsHeadingLineBareLetterDisambiguation(t *testing.T) {
 		{"RFC 1142 body prose starting with the word \"C\"", "C is a non-broadcast circuit, Clear SRMflag for C", false},
 		{"RFC 1277 body prose starting with the word \"A\"", "A decimal abstract encoding is defined for the DSP. The ECMA 117", false},
 		{"RFC 1035 zone-file example row, next \"word\" is a lone letter", "A       A       26.3.0.103", false},
+		// RFC 1035's header-field table in section 4.1.1 column-aligns a
+		// description at a wide gap after the field letter; a real bare-
+		// letter heading never separates its title that far (bare letters
+		// have no dot to justify a wide gap, cf. validWideGapDecimalMatch).
+		{"RFC 1035 header-field table row with a wide gap", "Z               Reserved for future use.  Must be zero in all queries", false},
+		// A zone-file row with a class column: the gap is heading-narrow
+		// but the rest is itself column-aligned (internal 2+-space runs),
+		// which real bare-letter heading titles never are.
+		{"zone-file row with class column", "A   IN   A   26.3.0.103", false},
+		// The internal-double-space rejection applies to the title
+		// portion only: a single 5+-space run separating the title from
+		// a same-line body continuation is splitHeadingGap's shape and
+		// must not disqualify the heading.
+		{"bare letter heading with wide-gap body continuation", "A   Options Considered          Inverse queries take the form", true},
+		{"dotted letter heading with wide-gap body continuation", "A. Some Title          continuation text", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -2,6 +2,7 @@ package rfcindex
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/higebu/rfc-mcp/db"
@@ -180,6 +181,51 @@ func TestTitleCaseStatus(t *testing.T) {
 		if got := TitleCaseStatus(tt.in); got != tt.want {
 			t.Errorf("TitleCaseStatus(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+// TestParse_MalformedEntryAmongGood pins the partial-parse contract callers
+// rely on (see ingest/pipeline.parseIndex): a malformed entry is skipped and
+// reported via a non-nil joined error, but every good entry is still
+// returned alongside it.
+func TestParse_MalformedEntryAmongGood(t *testing.T) {
+	const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<rfc-index>
+  <rfc-entry>
+    <doc-id>BOGUS123</doc-id>
+    <title>Broken entry</title>
+  </rfc-entry>
+  <rfc-entry>
+    <doc-id>RFC9999</doc-id>
+    <title>Good entry</title>
+    <date><month>August</month><year>2022</year></date>
+    <format><file-format>TXT</file-format></format>
+    <current-status>INTERNET STANDARD</current-status>
+  </rfc-entry>
+</rfc-index>`
+
+	rfcs, err := Parse(strings.NewReader(xml))
+	if err == nil {
+		t.Error("Parse: err = nil, want a joined skipped-entry error")
+	}
+	if len(rfcs) != 1 {
+		t.Fatalf("Parse returned %d entries, want the 1 good entry: %+v", len(rfcs), rfcs)
+	}
+	if rfcs[0].Number != 9999 || rfcs[0].Title != "Good entry" {
+		t.Errorf("good entry = %+v, want RFC 9999 %q", rfcs[0], "Good entry")
+	}
+}
+
+// TestParse_BrokenStream covers a truly broken stream (truncated XML that
+// yields no entries): callers must be able to detect it as zero entries plus
+// a non-nil error.
+func TestParse_BrokenStream(t *testing.T) {
+	rfcs, err := Parse(strings.NewReader(`<rfc-index><rfc-entry><doc-id>RFC1</doc-id>`))
+	if err == nil {
+		t.Error("Parse: err = nil, want an error for a truncated stream")
+	}
+	if len(rfcs) != 0 {
+		t.Errorf("Parse returned %d entries, want 0: %+v", len(rfcs), rfcs)
 	}
 }
 
