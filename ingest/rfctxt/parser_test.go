@@ -183,6 +183,9 @@ func TestParseRFC1035(t *testing.T) {
 	if got["A"] {
 		t.Errorf(`false-positive section "A" detected from body prose ("A host can participate...")`)
 	}
+	if got["Z"] {
+		t.Errorf(`false-positive section "Z" detected from the 4.1.1 header-field table ("Z               Reserved for future use...")`)
+	}
 
 	s641 := sectionByNumber(t, sections, "6.4.1")
 	if s641.Title != "The contents of inverse queries and responses" {

@@ -182,13 +182,31 @@ func validHeadingMatch(m []string) bool {
 // Every other alternative in headingRE already disambiguates itself with
 // a dot, digits, or the literal word "Appendix", so this check only
 // applies to a single bare capital letter.
+//
+// Two further table-row shapes slip past the two-character word
+// requirement and need rejecting on top of it. RFC 1035's header-field
+// table ("Z               Reserved for future use.  ...") column-aligns
+// an uppercase-starting description far from the field letter: a real
+// bare-letter heading never uses a gap that wide (it has no dot to
+// justify one — the same principle as validWideGapDecimalMatch), so the
+// token-to-title gap is capped at 3. And a DNS zone-file row with a
+// class column ("A   IN   A   26.3.0.103") keeps a heading-narrow gap
+// but is itself column-formatted: its rest carries internal runs of 2+
+// spaces, which real bare-letter heading titles ("Options Considered",
+// "RATIONALE FOR KEY DESIGN DECISIONS") never do.
 func validBareLetterMatch(m []string) bool {
 	token := m[1]
 	if len(token) != 1 || token[0] < 'A' || token[0] > 'Z' {
 		return true
 	}
 	rest := m[2]
-	return len(rest) >= 2 && rest[0] >= 'A' && rest[0] <= 'Z' && rest[1] != ' ' && rest[1] != '\t'
+	if len(rest) < 2 || rest[0] < 'A' || rest[0] > 'Z' || rest[1] == ' ' || rest[1] == '\t' {
+		return false
+	}
+	if gap := len(m[0]) - len(token) - len(rest); gap > 3 {
+		return false
+	}
+	return !strings.Contains(strings.TrimRight(rest, " \t"), "  ")
 }
 
 // validWideGapDecimalMatch guards the widened number-to-title gap
