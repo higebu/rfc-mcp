@@ -29,6 +29,21 @@ INSERT INTO rfcs (number, title, status, stream, date, page_count, authors, keyw
      'idr', 'rtg', '10.17487/RFC4271', '', '[1771]', '[]', '[]', '[]', '[]', 0),
     (9999, '', '', '', '', 0, '[]', '[]', '', '', '', '', '', '[]', '[]', '[]', '[]', '[]', 1);
 
+-- Fixture parent rows for tests that insert ad-hoc sections rows directly
+-- (PRAGMA foreign_keys=ON makes sections.rfc REFERENCES rfcs(number)
+-- enforced, so every fixture section needs a parent rfcs row). not_issued=1
+-- keeps them out of ListRFCs results and totals.
+INSERT INTO rfcs (number, title, not_issued) VALUES
+    (8000, 'Test Fixture 8000', 1),
+    (8100, 'Test Fixture 8100', 1),
+    (8200, 'Test Fixture 8200', 1),
+    (8300, 'Test Fixture 8300', 1),
+    (8301, 'Test Fixture 8301', 1),
+    (8400, 'Test Fixture 8400', 1),
+    (8401, 'Test Fixture 8401', 1),
+    (8500, 'Test Fixture 8500', 1),
+    (8501, 'Test Fixture 8501', 1);
+
 INSERT INTO sections (rfc, number, title, level, parent_number, content) VALUES
     (9293, '1', 'Introduction', 1, NULL,
      '# 1 Introduction

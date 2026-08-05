@@ -204,7 +204,7 @@ func (d *DB) Search(query string, rfcs []int, limit int) ([]SearchResult, error)
 	}
 	defer rows.Close()
 
-	var results []SearchResult
+	results := []SearchResult{} // non-nil so an empty result serializes as [], not null
 	for rows.Next() {
 		var r SearchResult
 		if err := rows.Scan(&r.RFC, &r.Number, &r.Title, &r.Snippet); err != nil {

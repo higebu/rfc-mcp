@@ -87,7 +87,7 @@ func (d *DB) GetErrataByRFC(rfc int) ([]Errata, error) {
 	}
 	defer rows.Close()
 
-	var items []Errata
+	items := []Errata{} // non-nil so an empty result serializes as [], not null
 	for rows.Next() {
 		var e Errata
 		if err := rows.Scan(

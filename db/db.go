@@ -15,13 +15,20 @@ type DB struct {
 	conn *sql.DB
 }
 
+// sqliteURIEscaper escapes the characters that are special inside an SQLite
+// "file:" URI path: '%' (the escape introducer itself, replaced first), '?'
+// (would start the query string) and '#' (would start the fragment). SQLite
+// percent-decodes the path on open, so every other character passes through
+// unchanged and the appended ?mode=ro query survives intact.
+var sqliteURIEscaper = strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23")
+
 // Open opens a database in read-only mode. Intended for the MCP server,
 // which never writes to the database it serves.
 func Open(path string) (*DB, error) {
 	// The "file:" URI scheme prefix is required for modernc.org/sqlite to
 	// honor the mode=ro query parameter; without it, mode=ro is silently
 	// ignored and the connection remains writable.
-	conn, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	conn, err := sql.Open("sqlite", "file:"+sqliteURIEscaper.Replace(path)+"?mode=ro")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -37,7 +44,10 @@ func Open(path string) (*DB, error) {
 // OpenReadWrite opens a database in read-write mode. Intended for ingestion
 // tooling and tests.
 func OpenReadWrite(path string) (*DB, error) {
-	conn, err := sql.Open("sqlite", path)
+	// The same file: URI escaping as Open: modernc.org/sqlite URL-parses
+	// even bare paths, so an unescaped '%', '?', or '#' in the path
+	// mis-parses (invalid escape, or spurious query/fragment split).
+	conn, err := sql.Open("sqlite", "file:"+sqliteURIEscaper.Replace(path))
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -48,6 +58,15 @@ func OpenReadWrite(path string) (*DB, error) {
 	}
 	if _, err := conn.Exec("PRAGMA busy_timeout=5000"); err != nil {
 		log.Printf("warning: failed to set busy_timeout: %v", err)
+	}
+	// The schema declares sections.rfc REFERENCES rfcs(number); without this
+	// pragma SQLite never enforces it. Enforcement is safe with the existing
+	// write paths: InsertRFCWithSections upserts the parent rfcs row before
+	// inserting sections in the same transaction, and INSERT OR REPLACE on a
+	// parent with live children nets out at statement end. rfc_references
+	// deliberately has no FK -- its targets may be RFCs not (yet) imported.
+	if _, err := conn.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		log.Printf("warning: failed to enable foreign_keys: %v", err)
 	}
 	if err := conn.Ping(); err != nil {
 		_ = conn.Close()

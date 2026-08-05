@@ -230,7 +230,10 @@ func extractContext(content string, start, end int) string {
 	}
 
 	ctxEnd := min(end+window, len(content))
-	if ctxEnd < len(content) {
+	// Snap back to a word boundary only when the cut actually lands
+	// mid-word: a window edge that falls exactly on a space already ends on
+	// a complete word, and snapping anyway would drop that trailing word.
+	if ctxEnd < len(content) && content[ctxEnd] != ' ' {
 		if idx := strings.LastIndexByte(content[end:ctxEnd], ' '); idx >= 0 {
 			ctxEnd = end + idx
 		}
@@ -311,7 +314,7 @@ func (d *DB) queryReferences(query string, args []any) ([]Reference, error) {
 	}
 	defer rows.Close()
 
-	var refs []Reference
+	refs := []Reference{} // non-nil so an empty result serializes as [], not null
 	for rows.Next() {
 		var r Reference
 		if err := rows.Scan(&r.SourceRFC, &r.SourceSection, &r.TargetRFC, &r.TargetSection, &r.Context, &r.TargetTitle); err != nil {

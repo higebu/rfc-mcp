@@ -46,6 +46,38 @@ func TestExtractContext(t *testing.T) {
 	}
 }
 
+// TestExtractContext_WordBoundarySnapping captures the issue #24 off-by-one:
+// when the context window's trailing edge falls exactly on a space, the last
+// word inside the window is complete and must be kept -- the old code
+// snapped back to the previous space unconditionally, dropping it. A cut
+// that genuinely lands mid-word still snaps back.
+func TestExtractContext_WordBoundarySnapping(t *testing.T) {
+	match := "RFC 9999"
+	end := len(match) // 8; window is 50, so the trailing edge is at byte 58
+
+	// 50 bytes of complete words after the match: the edge (byte 58) lands
+	// exactly on the space before "more", so "jjjj" is complete and kept.
+	content := match + " aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj" + " more"
+	if content[end+50] != ' ' {
+		t.Fatalf("test fixture broken: byte %d = %q, want a space", end+50, content[end+50])
+	}
+	got := extractContext(content, 0, end)
+	if !strings.Contains(got, "jjjj") {
+		t.Errorf("expected complete trailing word %q to be kept, got %q", "jjjj", got)
+	}
+
+	// The edge landing inside "jjjjjj" is a genuine mid-word cut: snap back
+	// and drop the partial word.
+	content = match + " aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjjjj"
+	got = extractContext(content, 0, end)
+	if strings.Contains(got, "jjjj") {
+		t.Errorf("expected mid-word cut to drop the partial word, got %q", got)
+	}
+	if !strings.Contains(got, "iiii") {
+		t.Errorf("expected snap to keep the last complete word %q, got %q", "iiii", got)
+	}
+}
+
 func TestInsertReferences(t *testing.T) {
 	d := setupTestDB(t)
 
