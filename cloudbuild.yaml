@@ -63,7 +63,7 @@ timeout: 3600s
 
 steps:
   - id: clone
-    name: gcr.io/cloud-builders/git
+    name: gcr.io/cloud-builders/git@sha256:cd777b3c8a45e42dcfdb30ddaa44497968b11c6d314cd462121012d7004b03ec
     entrypoint: bash
     args:
       - -ceu
@@ -82,7 +82,7 @@ steps:
         git rev-parse --short=12 HEAD > /workspace/image_tag
 
   - id: build
-    name: gcr.io/cloud-builders/docker
+    name: gcr.io/cloud-builders/docker@sha256:617f98016081e2978c0b44184d7b09446027b909f1078b8fdc23efc4c74c5f20
     dir: repo
     entrypoint: bash
     args:
@@ -98,7 +98,7 @@ steps:
           .
 
   - id: push
-    name: gcr.io/cloud-builders/docker
+    name: gcr.io/cloud-builders/docker@sha256:617f98016081e2978c0b44184d7b09446027b909f1078b8fdc23efc4c74c5f20
     entrypoint: bash
     args:
       - -ceu
