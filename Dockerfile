@@ -1,5 +1,5 @@
 # 1) Build the static binary.
-FROM golang:1.26-bookworm@sha256:6c5605ab3a9a9fb3c4eafe5b3d63cdbf3881caf113262b67862547b54a9db599 AS go-builder
+FROM golang:1.26-bookworm@sha256:53eeac89074db483fdf0ab3be1df32bf6e47562263d2d0d6baa7f26acb4957dd AS go-builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 #    to restrict to a numeric range for a fast smoke-test image. No LibreOffice
 #    needed here (plain-text parsing only, unlike 3gpp-mcp's .docx pipeline) --
 #    just ca-certificates for the HTTPS fetches to rfc-editor.org.
-FROM golang:1.26-bookworm@sha256:6c5605ab3a9a9fb3c4eafe5b3d63cdbf3881caf113262b67862547b54a9db599 AS db-builder
+FROM golang:1.26-bookworm@sha256:53eeac89074db483fdf0ab3be1df32bf6e47562263d2d0d6baa7f26acb4957dd AS db-builder
 ARG FROM_RFC=
 ARG TO_RFC=
 RUN apt-get update \
