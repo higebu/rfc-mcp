@@ -82,7 +82,7 @@ steps:
         git rev-parse --short=12 HEAD > /workspace/image_tag
 
   - id: build
-    name: gcr.io/cloud-builders/docker@sha256:001fb4a870a84485cf198c80002f7af42f6456f2dbc261d70a0b5f0111470df4
+    name: gcr.io/cloud-builders/docker@sha256:bbb3d633c5c2813b2ce5245852979e1d637768f4acfc504d8ece288f91e9b60f
     dir: repo
     entrypoint: bash
     args:
@@ -98,7 +98,7 @@ steps:
           .
 
   - id: push
-    name: gcr.io/cloud-builders/docker@sha256:001fb4a870a84485cf198c80002f7af42f6456f2dbc261d70a0b5f0111470df4
+    name: gcr.io/cloud-builders/docker@sha256:bbb3d633c5c2813b2ce5245852979e1d637768f4acfc504d8ece288f91e9b60f
     entrypoint: bash
     args:
       - -ceu
